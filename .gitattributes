@@ -1,0 +1,11 @@
+# Normaliza los fines de linea entre Windows y los contenedores Linux.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+
+*.jar  binary
+*.png  binary
+*.jpg  binary
+*.pdf  binary
