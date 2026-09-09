@@ -1,0 +1,344 @@
+openapi: 3.0.3
+info:
+  title: ms-andesstay-catalog
+  description: >
+    Catalogo de unidades (habitaciones, cabanas y lodges), tarifas y disponibilidad.
+    Los endpoints hold y release son internos: solo los llama ms-andesstay-reservations
+    y no se publican en el API Gateway.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8082
+    description: Desarrollo local
+  - url: http://ec2-apps:8082
+    description: Despliegue en EC2 (red interna)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: unidades
+  - name: disponibilidad
+
+paths:
+  /api/catalog/units:
+    get:
+      tags: [unidades]
+      summary: Listar unidades
+      operationId: listarUnidades
+      parameters:
+        - name: tipo
+          in: query
+          schema: { $ref: '#/components/schemas/TipoUnidad' }
+        - name: hostalId
+          in: query
+          schema: { type: string }
+        - name: activa
+          in: query
+          schema: { type: boolean, default: true }
+        - name: page
+          in: query
+          schema: { type: integer, default: 0, minimum: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, default: 20, minimum: 1, maximum: 100 }
+      responses:
+        '200':
+          description: Pagina de unidades
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaginaUnidades' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+    post:
+      tags: [unidades]
+      summary: Crear una unidad
+      description: Solo Admin.
+      operationId: crearUnidad
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UnidadRequest' }
+      responses:
+        '201':
+          description: Unidad creada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Unidad' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '409':
+          description: Ya existe una unidad con ese codigo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/catalog/units/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+        example: U-045
+    get:
+      tags: [unidades]
+      summary: Obtener una unidad
+      operationId: obtenerUnidad
+      responses:
+        '200':
+          description: La unidad
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Unidad' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+    put:
+      tags: [unidades]
+      summary: Actualizar tarifa o disponibilidad de una unidad
+      description: Solo Admin.
+      operationId: actualizarUnidad
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UnidadRequest' }
+      responses:
+        '200':
+          description: Unidad actualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Unidad' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /api/catalog/units/{id}/availability:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [disponibilidad]
+      summary: Consultar disponibilidad de una unidad en un rango
+      operationId: consultarDisponibilidad
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Disponibilidad dia a dia
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Disponibilidad' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /api/catalog/units/{id}/hold:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [disponibilidad]
+      summary: Reservar cupo (INTERNO)
+      description: >
+        Lo llama ms-andesstay-reservations al confirmar una reserva, propagando el JWT
+        del usuario para no perder trazabilidad.
+        Usa bloqueo optimista: dos hold concurrentes sobre el ultimo cupo, solo uno gana.
+        Es la operacion que evita el overbooking. No se publica en el API Gateway.
+      operationId: reservarCupo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CupoRequest' }
+      responses:
+        '200':
+          description: Cupo reservado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CupoResponse' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: Sin disponibilidad, o conflicto de concurrencia
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                sinCupo:
+                  value:
+                    error: SIN_DISPONIBILIDAD
+                    unitId: U-045
+                    fecha: '2026-10-12'
+                    cuposDisponibles: 0
+                    timestamp: '2026-09-09T14:30:00Z'
+
+  /api/catalog/units/{id}/release:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [disponibilidad]
+      summary: Liberar cupo (INTERNO)
+      description: >
+        Lo llama ms-andesstay-reservations al cancelar una reserva confirmada o al
+        hacer checkout. Es idempotente: liberar dos veces el mismo holdId no devuelve
+        cupo de mas. No se publica en el API Gateway.
+      operationId: liberarCupo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CupoRequest' }
+      responses:
+        '200':
+          description: Cupo liberado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CupoResponse' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    TipoUnidad:
+      type: string
+      enum: [HABITACION, CABANA, LODGE]
+
+    UnidadRequest:
+      type: object
+      required: [codigo, nombre, tipo, capacidad, tarifaNoche, hostalId]
+      properties:
+        codigo: { type: string, example: CAB-COIGUE-01 }
+        nombre: { type: string, example: Cabana Coigue }
+        tipo: { $ref: '#/components/schemas/TipoUnidad' }
+        capacidad: { type: integer, minimum: 1, maximum: 20 }
+        tarifaNoche:
+          type: integer
+          minimum: 0
+          description: Monto en pesos, sin decimales
+          example: 45000
+        moneda: { type: string, default: CLP }
+        hostalId: { type: string, example: H-007 }
+        activa: { type: boolean, default: true }
+        descripcion: { type: string, maxLength: 1000 }
+
+    Unidad:
+      allOf:
+        - $ref: '#/components/schemas/UnidadRequest'
+        - type: object
+          properties:
+            id: { type: string, example: U-045 }
+            creadaEn: { type: string, format: date-time }
+            actualizadaEn: { type: string, format: date-time }
+            version:
+              type: integer
+              description: Control de concurrencia optimista
+
+    PaginaUnidades:
+      type: object
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/Unidad' }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer }
+        totalPages: { type: integer }
+
+    Disponibilidad:
+      type: object
+      properties:
+        unitId: { type: string }
+        fecha: { type: string, format: date }
+        cuposTotales: { type: integer }
+        cuposDisponibles: { type: integer }
+
+    CupoRequest:
+      type: object
+      required: [reservationId, fechaEntrada, fechaSalida]
+      properties:
+        reservationId: { type: string, example: R-2026-000123 }
+        fechaEntrada: { type: string, format: date }
+        fechaSalida: { type: string, format: date }
+        cupos: { type: integer, default: 1, minimum: 1 }
+
+    CupoResponse:
+      type: object
+      properties:
+        holdId:
+          type: string
+          format: uuid
+          description: Identifica esta operacion; hace idempotente el release
+        unitId: { type: string }
+        reservationId: { type: string }
+        fechaEntrada: { type: string, format: date }
+        fechaSalida: { type: string, format: date }
+        cupos: { type: integer }
+
+    Error:
+      type: object
+      required: [error, timestamp]
+      properties:
+        error:
+          type: string
+          enum:
+            - SOLICITUD_INVALIDA
+            - TOKEN_INVALIDO
+            - ROL_INSUFICIENTE
+            - UNIDAD_NO_ENCONTRADA
+            - CODIGO_DUPLICADO
+            - SIN_DISPONIBILIDAD
+            - CONFLICTO_CONCURRENCIA
+        mensaje: { type: string }
+        unitId: { type: string }
+        fecha: { type: string, format: date }
+        cuposDisponibles: { type: integer }
+        timestamp: { type: string, format: date-time }
+        traceId: { type: string, format: uuid }
+
+  responses:
+    SolicitudInvalida:
+      description: Datos de entrada invalidos
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoAutenticado:
+      description: Falta el token, o es invalido, expirado o de un emisor desconocido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RolInsuficiente:
+      description: Token valido pero sin permiso para la operacion
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoEncontrado:
+      description: El recurso no existe
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }

@@ -1,0 +1,175 @@
+openapi: 3.0.3
+info:
+  title: ms-andesstay-report
+  description: >
+    Panel de operaciones en tiempo real. Solo lectura: las agregaciones se construyen
+    consumiendo el topico Kafka reservations.events, sin bloquear ni acoplar al
+    servicio de reservas.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8085
+    description: Desarrollo local
+  - url: http://ec2-apps:8085
+    description: Despliegue en EC2 (red interna)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: kpis
+
+paths:
+  /api/report/kpis:
+    get:
+      tags: [kpis]
+      summary: KPIs de operacion
+      description: >
+        Reservas por hora, tiempo de ciclo y ocupacion activa. Solo Admin.
+      operationId: obtenerKpis
+      parameters:
+        - name: range
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/Rango' }
+        - name: hostalId
+          in: query
+          description: Filtra a un hostal en particular
+          schema: { type: string }
+      responses:
+        '200':
+          description: KPIs del rango
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Kpis' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+
+  /api/report/top-units:
+    get:
+      tags: [kpis]
+      summary: Unidades mas demandadas
+      description: Ranking por numero de reservas en el rango. Solo Admin.
+      operationId: obtenerTopUnidades
+      parameters:
+        - name: range
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/Rango' }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 10, minimum: 1, maximum: 50 }
+      responses:
+        '200':
+          description: Ranking de unidades
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  range: { $ref: '#/components/schemas/Rango' }
+                  generadoEn: { type: string, format: date-time }
+                  unidades:
+                    type: array
+                    items: { $ref: '#/components/schemas/UnidadDemandada' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Solo tokens del tenant corporativo, con rol Admin.
+
+  schemas:
+    Rango:
+      type: string
+      enum: [last24h, last7d, last30d]
+
+    Kpis:
+      type: object
+      properties:
+        range: { $ref: '#/components/schemas/Rango' }
+        generadoEn: { type: string, format: date-time }
+        reservasPorHora:
+          type: array
+          description: Serie temporal para el grafico del panel
+          items:
+            type: object
+            properties:
+              hora: { type: string, format: date-time }
+              creadas: { type: integer }
+              confirmadas: { type: integer }
+              canceladas: { type: integer }
+        tiempoCiclo:
+          type: object
+          description: Horas entre CREADA y CHECKOUT
+          properties:
+            promedioHoras: { type: number, format: double }
+            medianaHoras: { type: number, format: double }
+            p95Horas: { type: number, format: double }
+            muestras: { type: integer }
+        ocupacionActiva:
+          type: object
+          description: Situacion en este momento, no del rango
+          properties:
+            unidadesEnEstadia: { type: integer }
+            unidadesTotales: { type: integer }
+            porcentajeOcupacion: { type: number, format: double }
+        totales:
+          type: object
+          properties:
+            reservasCreadas: { type: integer }
+            reservasConfirmadas: { type: integer }
+            reservasCanceladas: { type: integer }
+            tasaCancelacion: { type: number, format: double }
+
+    UnidadDemandada:
+      type: object
+      properties:
+        unitId: { type: string, example: U-045 }
+        nombre: { type: string, example: Cabana Coigue }
+        tipo:
+          type: string
+          enum: [HABITACION, CABANA, LODGE]
+        reservas: { type: integer }
+        nochesVendidas: { type: integer }
+        ingresoTotal:
+          type: integer
+          description: Monto en pesos, sin decimales
+
+    Error:
+      type: object
+      required: [error, timestamp]
+      properties:
+        error:
+          type: string
+          enum:
+            - SOLICITUD_INVALIDA
+            - RANGO_INVALIDO
+            - TOKEN_INVALIDO
+            - ROL_INSUFICIENTE
+        mensaje: { type: string }
+        timestamp: { type: string, format: date-time }
+        traceId: { type: string, format: uuid }
+
+  responses:
+    SolicitudInvalida:
+      description: Parametros invalidos
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoAutenticado:
+      description: Falta el token, o es invalido, expirado o de un emisor desconocido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RolInsuficiente:
+      description: Token valido pero sin rol Admin
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
