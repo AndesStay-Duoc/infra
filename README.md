@@ -31,6 +31,16 @@ Antes de escribir código contra otro servicio, revisar:
 | [`docs/contracts/events/rabbit.md`](docs/contracts/events/rabbit.md) | Exchanges, colas, DLQ y esquemas de mensajes |
 | [`docs/contracts/openapi/`](docs/contracts/openapi/) | Contrato REST de cada servicio |
 
+## Guias de configuracion
+
+Trabajo de portal y consola, paso a paso. Se ejecutan antes de escribir el codigo que las usa.
+
+| Guia | Para que |
+|---|---|
+| [`docs/guias/azure-identidad.md`](docs/guias/azure-identidad.md) | Los dos tenants: app registrations, roles, user flow de auto-registro y evidencia de PKCE |
+| [`docs/guias/aws-gateway-ec2.md`](docs/guias/aws-gateway-ec2.md) | API Gateway con sus dos authorizers, las 16 rutas, CORS, las instancias EC2 y la bateria de pruebas |
+| [`docs/idaas/tenants.md`](docs/idaas/tenants.md) | Plantilla donde se registran los identificadores resultantes |
+
 ## Arquitectura
 
 ```
