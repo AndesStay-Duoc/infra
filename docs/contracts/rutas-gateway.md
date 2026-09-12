@@ -10,16 +10,21 @@ indicador 7, pertenece a HTTP API.
 
 ## Por qué las rutas se parten en `/staff` y `/guest`
 
-Un JWT Authorizer valida **un solo issuer**, y el sistema tiene dos tenants. Con dos authorizers
-y las rutas separadas por audiencia, cada ruta queda asociada al emisor que le corresponde y
-queda visible en la consola que todas validan issuer y audience.
+El personal y los huéspedes usan **app registrations distintas**, y por lo tanto **audiences
+distintas**. Con dos authorizers y las rutas separadas por audiencia, cada ruta queda asociada
+a la aplicación que le corresponde, y queda visible en la consola que todas validan issuer y
+audience.
+
+Ambas aplicaciones viven en el **mismo tenant**, así que los dos authorizers comparten issuer y
+se diferencian solo por la audience. La separación sigue siendo efectiva: un token emitido para
+la aplicación de huéspedes tiene `aud` de esa app y el authorizer de `/staff/*` lo rechaza.
 
 ## Authorizers
 
 | Nombre | Issuer | Audience | Scope requerido |
 |---|---|---|---|
 | `entra-staff` | `https://login.microsoftonline.com/<staff-tenant-id>/v2.0` | `api://<staff-client-id>` | `access_as_staff` |
-| `entra-guest` | *(issuer del tenant External ID)* | `api://<guest-client-id>` | `access_as_guest` |
+| `entra-guest` | `https://login.microsoftonline.com/<tenant-id>/v2.0` *(el mismo)* | `api://<guest-client-id>` | `access_as_guest` |
 
 Los valores reales se registran en `infra/docs/idaas/` y **no se versionan** los secretos.
 
