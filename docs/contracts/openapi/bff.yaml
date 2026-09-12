@@ -1,0 +1,278 @@
+openapi: 3.0.3
+info:
+  title: ms-andesstay-bff
+  description: >
+    Backend for Frontend. Unico punto de entrada al dominio: el frontend nunca llama
+    directo a un microservicio.
+
+    El BFF acepta tokens de los DOS tenants mediante
+    JwtIssuerAuthenticationManagerResolver, y por cada uno valida issuer, audience,
+    firma y vigencia. Spring no valida el audience por defecto: hay un
+    OAuth2TokenValidator propio para eso.
+
+    Repite la validacion aunque el API Gateway ya la haya hecho: un servicio nunca
+    debe quedar expuesto si alguien alcanza su puerto directamente.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8080
+    description: Desarrollo local
+  - url: https://<api-id>.execute-api.<region>.amazonaws.com
+    description: A traves del API Gateway
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: reservas
+  - name: catalogo
+  - name: reporteria
+  - name: auditoria
+  - name: desarrollo
+
+paths:
+  /api/reservations:
+    post:
+      tags: [reservas]
+      summary: Crear una reserva
+      description: Delega en ms-andesstay-reservations. Roles Huesped, Recepcionista y Admin.
+      operationId: bffCrearReserva
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Reserva creada }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+    get:
+      tags: [reservas]
+      summary: Listar reservas
+      description: Un huesped solo ve las propias, filtradas por el sub de su token.
+      operationId: bffListarReservas
+      responses:
+        '200': { description: Pagina de reservas }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+
+  /api/reservations/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [reservas]
+      summary: Obtener una reserva
+      operationId: bffObtenerReserva
+      responses:
+        '200': { description: La reserva }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /api/reservations/{id}/status:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    put:
+      tags: [reservas]
+      summary: Cambiar el estado de una reserva
+      operationId: bffCambiarEstado
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Estado actualizado }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { description: Transicion invalida o sin disponibilidad }
+
+  /api/catalog/units:
+    get:
+      tags: [catalogo]
+      summary: Listar unidades
+      operationId: bffListarUnidades
+      responses:
+        '200': { description: Pagina de unidades }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+    post:
+      tags: [catalogo]
+      summary: Crear una unidad
+      description: Solo Admin.
+      operationId: bffCrearUnidad
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Unidad creada }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+
+  /api/catalog/units/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    put:
+      tags: [catalogo]
+      summary: Actualizar tarifa o disponibilidad
+      description: Solo Admin.
+      operationId: bffActualizarUnidad
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Unidad actualizada }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /api/report/kpis:
+    get:
+      tags: [reporteria]
+      summary: KPIs de operacion
+      description: Solo Admin.
+      operationId: bffKpis
+      parameters:
+        - { name: range, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: KPIs }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+
+  /api/report/top-units:
+    get:
+      tags: [reporteria]
+      summary: Unidades mas demandadas
+      description: Solo Admin.
+      operationId: bffTopUnidades
+      parameters:
+        - { name: range, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Ranking }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+
+  /api/audit:
+    get:
+      tags: [auditoria]
+      summary: Consultar el timeline
+      description: Solo Admin y Auditor.
+      operationId: bffAuditoria
+      responses:
+        '200': { description: Pagina de eventos }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+
+  /api/audit/{reservationId}:
+    parameters:
+      - { name: reservationId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [auditoria]
+      summary: Timeline de una reserva
+      operationId: bffTimelineReserva
+      responses:
+        '200': { description: Timeline }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /dev/token:
+    post:
+      tags: [desarrollo]
+      summary: Emitir un token de desarrollo
+      description: >
+        SOLO EXISTE CON EL PERFIL dev. Esta anotado con @Profile("dev") desde el primer
+        commit, asi que no existe en el perfil cloud ni en lo que se entrega.
+
+        Es andamiaje para trabajar mientras se configuran los tenants: firma un JWT
+        RS256 con la clave privada de desarrollo, con los roles que se le pidan.
+      operationId: emitirTokenDesarrollo
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject, roles]
+              properties:
+                subject: { type: string, example: usuario-prueba-01 }
+                roles:
+                  type: array
+                  items:
+                    type: string
+                    enum: [Admin, Recepcionista, Huesped, Auditor]
+                tenant:
+                  type: string
+                  enum: [staff, guest]
+                  default: staff
+                expiraEnMinutos: { type: integer, default: 60 }
+      responses:
+        '200':
+          description: Token emitido
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  token_type: { type: string, example: Bearer }
+                  expires_in: { type: integer }
+        '404':
+          description: El perfil dev no esta activo
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        JWT de cualquiera de los dos tenants. Ver docs/contracts/roles.md para el
+        mapeo de claims a authorities y la matriz endpoint por rol.
+
+  schemas:
+    Error:
+      type: object
+      required: [error, timestamp]
+      properties:
+        error:
+          type: string
+          enum:
+            - SOLICITUD_INVALIDA
+            - TOKEN_INVALIDO
+            - ROL_INSUFICIENTE
+            - RECURSO_NO_ENCONTRADO
+            - SERVICIO_NO_DISPONIBLE
+        mensaje: { type: string }
+        timestamp: { type: string, format: date-time }
+        traceId: { type: string, format: uuid }
+
+  responses:
+    SolicitudInvalida:
+      description: Datos de entrada invalidos
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoAutenticado:
+      description: >
+        Falta el token, o es invalido, expirado, con firma alterada, con audience
+        incorrecta o de un emisor desconocido.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RolInsuficiente:
+      description: Token valido pero sin permiso para la operacion o el recurso
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoEncontrado:
+      description: El recurso no existe
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }

@@ -1,0 +1,22 @@
+# --- Entorno y secretos: NUNCA versionar ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.wallet
+wallet/
+
+# --- Volumenes y datos de contenedores ---
+data/
+volumes/
+oradata/
+
+# --- Editores ---
+.idea/
+.vscode/
+*.iml
+
+# --- Sistema operativo ---
+.DS_Store
+Thumbs.db

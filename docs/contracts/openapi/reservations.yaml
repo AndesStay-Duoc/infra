@@ -1,0 +1,289 @@
+openapi: 3.0.3
+info:
+  title: ms-andesstay-reservations
+  description: >
+    Gestion de reservas de hospedaje y su maquina de estados.
+    Las transiciones validas estan definidas en docs/contracts/estados.md y son parte
+    del contrato: una transicion fuera de esa tabla responde 409.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8081
+    description: Desarrollo local
+  - url: http://ec2-apps:8081
+    description: Despliegue en EC2 (red interna, solo alcanzable desde el BFF)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: reservas
+
+paths:
+  /api/reservations:
+    post:
+      tags: [reservas]
+      summary: Crear una reserva
+      description: La reserva nace en estado CREADA y no compromete disponibilidad todavia.
+      operationId: crearReserva
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CrearReservaRequest' }
+      responses:
+        '201':
+          description: Reserva creada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Reserva' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+
+    get:
+      tags: [reservas]
+      summary: Listar reservas
+      description: >
+        Un huesped solo ve las propias, con independencia de los filtros que envie.
+        Admin y Recepcionista ven todas.
+      operationId: listarReservas
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/EstadoReserva' }
+        - name: from
+          in: query
+          description: Fecha de entrada desde, inclusive
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          description: Fecha de entrada hasta, inclusive
+          schema: { type: string, format: date }
+        - name: unitId
+          in: query
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, default: 0, minimum: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, default: 20, minimum: 1, maximum: 100 }
+      responses:
+        '200':
+          description: Pagina de reservas
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaginaReservas' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+
+  /api/reservations/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+        example: R-2026-000123
+    get:
+      tags: [reservas]
+      summary: Obtener una reserva
+      description: >
+        Un huesped que pide una reserva ajena recibe 403, no 404: no se revela la
+        existencia del recurso.
+      operationId: obtenerReserva
+      responses:
+        '200':
+          description: La reserva
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Reserva' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /api/reservations/{id}/status:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      tags: [reservas]
+      summary: Cambiar el estado de una reserva
+      description: >
+        Aplica la maquina de estados de docs/contracts/estados.md.
+        Confirmar dispara un hold de cupo contra catalog: si no hay disponibilidad
+        responde 409 SIN_DISPONIBILIDAD y la reserva permanece en CREADA.
+        No se puede hacer check-in sin confirmar.
+      operationId: cambiarEstadoReserva
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: '#/components/schemas/EstadoReserva' }
+                motivo:
+                  type: string
+                  description: Obligatorio al cancelar
+                  maxLength: 500
+      responses:
+        '200':
+          description: Estado actualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Reserva' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: Transicion invalida o sin disponibilidad
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                transicionInvalida:
+                  value:
+                    error: TRANSICION_INVALIDA
+                    desde: CREADA
+                    hacia: EN_ESTADIA
+                    timestamp: '2026-09-09T14:30:00Z'
+                    traceId: 3a7f1e90-2c44-4b8d-9e01-7f2b5c8a4d16
+                sinDisponibilidad:
+                  value:
+                    error: SIN_DISPONIBILIDAD
+                    unitId: U-045
+                    timestamp: '2026-09-09T14:30:00Z'
+                    traceId: 3a7f1e90-2c44-4b8d-9e01-7f2b5c8a4d16
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        JWT emitido por el tenant corporativo o por el de huespedes.
+        Se validan issuer, audience, firma y vigencia. Ver docs/contracts/roles.md.
+
+  schemas:
+    EstadoReserva:
+      type: string
+      description: >
+        Se usa EN_ESTADIA sin tilde para evitar problemas de encoding.
+        Al deserializar tambien se acepta EN_ESTADIA con tilde, pero la respuesta
+        siempre usa la forma sin tilde.
+      enum: [CREADA, CONFIRMADA, CHECKIN_PENDIENTE, EN_ESTADIA, CHECKOUT, CANCELADA]
+
+    CrearReservaRequest:
+      type: object
+      required: [unitId, fechaEntrada, fechaSalida, huespedes]
+      properties:
+        unitId:
+          type: string
+          example: U-045
+        fechaEntrada:
+          type: string
+          format: date
+          example: '2026-10-12'
+        fechaSalida:
+          type: string
+          format: date
+          example: '2026-10-15'
+        huespedes:
+          type: integer
+          minimum: 1
+          maximum: 20
+          example: 2
+        guestEmail:
+          type: string
+          format: email
+          description: >
+            Solo lo envia una Recepcionista al crear la reserva de un tercero.
+            Cuando crea el propio huesped se toma del token.
+        notas:
+          type: string
+          maxLength: 500
+
+    Reserva:
+      type: object
+      properties:
+        id: { type: string, example: R-2026-000123 }
+        unitId: { type: string, example: U-045 }
+        guestId:
+          type: string
+          description: sub del token de quien es titular de la reserva
+        guestEmail: { type: string, format: email }
+        fechaEntrada: { type: string, format: date }
+        fechaSalida: { type: string, format: date }
+        huespedes: { type: integer }
+        estado: { $ref: '#/components/schemas/EstadoReserva' }
+        tarifaTotal: { type: integer, description: Monto en pesos, sin decimales }
+        moneda: { type: string, example: CLP }
+        correlationId:
+          type: string
+          format: uuid
+          description: Agrupa todos los eventos del ciclo de vida de esta reserva
+        notas: { type: string }
+        creadaEn: { type: string, format: date-time }
+        actualizadaEn: { type: string, format: date-time }
+        creadaPor: { type: string }
+
+    PaginaReservas:
+      type: object
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/Reserva' }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer }
+        totalPages: { type: integer }
+
+    Error:
+      type: object
+      required: [error, timestamp]
+      properties:
+        error:
+          type: string
+          enum:
+            - SOLICITUD_INVALIDA
+            - ESTADO_INVALIDO
+            - TOKEN_INVALIDO
+            - ROL_INSUFICIENTE
+            - RESERVA_NO_ENCONTRADA
+            - TRANSICION_INVALIDA
+            - SIN_DISPONIBILIDAD
+            - CATALOGO_NO_DISPONIBLE
+        mensaje: { type: string }
+        desde: { type: string }
+        hacia: { type: string }
+        unitId: { type: string }
+        timestamp: { type: string, format: date-time }
+        traceId: { type: string, format: uuid }
+
+  responses:
+    SolicitudInvalida:
+      description: Datos de entrada invalidos
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoAutenticado:
+      description: Falta el token, o es invalido, expirado o de un emisor desconocido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RolInsuficiente:
+      description: Token valido pero sin permiso para la operacion o el recurso
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoEncontrado:
+      description: El recurso no existe
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }

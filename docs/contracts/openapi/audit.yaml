@@ -1,0 +1,186 @@
+openapi: 3.0.3
+info:
+  title: ms-andesstay-audit
+  description: >
+    Timeline de auditoria de las reservas. Solo lectura: el historial se construye
+    consumiendo el topico Kafka audit.timeline, nunca por escritura directa.
+    Responde quien hizo que, cuando y desde donde.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8084
+    description: Desarrollo local
+  - url: http://ec2-apps:8084
+    description: Despliegue en EC2 (red interna)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: auditoria
+
+paths:
+  /api/audit:
+    get:
+      tags: [auditoria]
+      summary: Consultar el timeline con filtros
+      description: Solo Admin y Auditor.
+      operationId: consultarTimeline
+      parameters:
+        - name: reservationId
+          in: query
+          schema: { type: string }
+          example: R-2026-000123
+        - name: userId
+          in: query
+          description: sub del usuario que ejecuto la accion
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: type
+          in: query
+          description: Tipo de evento, por ejemplo reservation.confirmed
+          schema: { type: string }
+        - name: entidad
+          in: query
+          schema: { type: string, enum: [Reservation, Unit, Availability] }
+        - name: page
+          in: query
+          schema: { type: integer, default: 0, minimum: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+      responses:
+        '200':
+          description: Pagina de eventos, del mas reciente al mas antiguo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaginaEventos' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+
+  /api/audit/{reservationId}:
+    parameters:
+      - name: reservationId
+        in: path
+        required: true
+        schema: { type: string }
+        example: R-2026-000123
+    get:
+      tags: [auditoria]
+      summary: Timeline completo de una reserva
+      description: >
+        Devuelve todos los eventos de la reserva en orden cronologico ascendente.
+        El orden esta garantizado porque Kafka particiona por reservationId.
+      operationId: timelineDeReserva
+      responses:
+        '200':
+          description: Timeline de la reserva
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reservationId: { type: string }
+                  correlationId: { type: string, format: uuid }
+                  eventos:
+                    type: array
+                    items: { $ref: '#/components/schemas/EventoAuditoria' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Solo tokens del tenant corporativo, con rol Admin o Auditor.
+
+  schemas:
+    EventoAuditoria:
+      type: object
+      description: Corresponde al envelope comun definido en docs/contracts/events/envelope.md
+      properties:
+        type: { type: string, example: reservation.confirmed }
+        eventId: { type: string, format: uuid }
+        timestamp: { type: string, format: date-time }
+        traceId: { type: string, format: uuid }
+        correlationId: { type: string, format: uuid }
+        source: { type: string, example: ms-andesstay-reservations }
+        actor:
+          type: object
+          properties:
+            userId: { type: string }
+            role:
+              type: string
+              enum: [ADMIN, RECEPCIONISTA, HUESPED, AUDITOR]
+            tenant:
+              type: string
+              enum: [staff, guest]
+        payload:
+          type: object
+          properties:
+            entidad: { type: string, enum: [Reservation, Unit, Availability] }
+            entidadId: { type: string }
+            accion:
+              type: string
+              enum: [CREACION, ACTUALIZACION, CAMBIO_ESTADO, HOLD, RELEASE]
+            desde: { type: string }
+            hacia: { type: string }
+            ip: { type: string }
+            userAgent: { type: string }
+
+    PaginaEventos:
+      type: object
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/EventoAuditoria' }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer }
+        totalPages: { type: integer }
+
+    Error:
+      type: object
+      required: [error, timestamp]
+      properties:
+        error:
+          type: string
+          enum:
+            - SOLICITUD_INVALIDA
+            - TOKEN_INVALIDO
+            - ROL_INSUFICIENTE
+            - RESERVA_NO_ENCONTRADA
+        mensaje: { type: string }
+        timestamp: { type: string, format: date-time }
+        traceId: { type: string, format: uuid }
+
+  responses:
+    SolicitudInvalida:
+      description: Filtros invalidos
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoAutenticado:
+      description: Falta el token, o es invalido, expirado o de un emisor desconocido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RolInsuficiente:
+      description: Token valido pero sin rol Admin ni Auditor
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoEncontrado:
+      description: No hay eventos para esa reserva
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
