@@ -1,0 +1,36 @@
+{
+  "vhosts": [{ "name": "andesstay" }],
+  "exchanges": [
+    { "name": "cmd.direct", "vhost": "andesstay", "type": "direct", "durable": true, "auto_delete": false },
+    { "name": "cmd.topic",  "vhost": "andesstay", "type": "topic",  "durable": true, "auto_delete": false },
+    { "name": "cmd.dead.dlx", "vhost": "andesstay", "type": "direct", "durable": true, "auto_delete": false }
+  ],
+  "queues": [
+    {
+      "name": "q.cmd.email", "vhost": "andesstay", "durable": true,
+      "arguments": { "x-dead-letter-exchange": "cmd.dead.dlx", "x-dead-letter-routing-key": "email.dead" }
+    },
+    { "name": "q.cmd.email.dlq", "vhost": "andesstay", "durable": true, "arguments": {} },
+    {
+      "name": "q.cmd.housekeeping", "vhost": "andesstay", "durable": true,
+      "arguments": { "x-dead-letter-exchange": "cmd.dead.dlx", "x-dead-letter-routing-key": "housekeeping.dead" }
+    },
+    { "name": "q.cmd.housekeeping.dlq", "vhost": "andesstay", "durable": true, "arguments": {} },
+    {
+      "name": "q.cmd.voucher", "vhost": "andesstay", "durable": true,
+      "arguments": { "x-dead-letter-exchange": "cmd.dead.dlx", "x-dead-letter-routing-key": "voucher.dead" }
+    },
+    { "name": "q.cmd.voucher.dlq", "vhost": "andesstay", "durable": true, "arguments": {} }
+  ],
+  "bindings": [
+    { "source": "cmd.direct", "vhost": "andesstay", "destination": "q.cmd.email",        "destination_type": "queue", "routing_key": "email.send" },
+    { "source": "cmd.direct", "vhost": "andesstay", "destination": "q.cmd.housekeeping", "destination_type": "queue", "routing_key": "housekeeping.ticket" },
+    { "source": "cmd.direct", "vhost": "andesstay", "destination": "q.cmd.voucher",      "destination_type": "queue", "routing_key": "voucher.gen" },
+    { "source": "cmd.topic",  "vhost": "andesstay", "destination": "q.cmd.email",        "destination_type": "queue", "routing_key": "email.*" },
+    { "source": "cmd.topic",  "vhost": "andesstay", "destination": "q.cmd.housekeeping", "destination_type": "queue", "routing_key": "housekeeping.#" },
+    { "source": "cmd.topic",  "vhost": "andesstay", "destination": "q.cmd.voucher",      "destination_type": "queue", "routing_key": "voucher.*" },
+    { "source": "cmd.dead.dlx", "vhost": "andesstay", "destination": "q.cmd.email.dlq",        "destination_type": "queue", "routing_key": "email.dead" },
+    { "source": "cmd.dead.dlx", "vhost": "andesstay", "destination": "q.cmd.housekeeping.dlq", "destination_type": "queue", "routing_key": "housekeeping.dead" },
+    { "source": "cmd.dead.dlx", "vhost": "andesstay", "destination": "q.cmd.voucher.dlq",      "destination_type": "queue", "routing_key": "voucher.dead" }
+  ]
+}
