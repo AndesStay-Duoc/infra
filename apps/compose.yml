@@ -1,0 +1,123 @@
+version: "3.9"
+
+# Microservicios AndesStay
+# Requiere que la red andesstay-mq y andesstay-kafka ya estén activas
+# Levantar: docker compose -f infra/mq/compose.yml up -d
+#           docker compose -f infra/kafka/compose.yml up -d
+#           docker compose -f infra/apps/compose.yml up -d
+
+networks:
+  andesstay-apps:
+    driver: bridge
+  andesstay-mq:
+    external: true
+  andesstay-kafka:
+    external: true
+
+services:
+  # ── BFF ──────────────────────────────────────────────────────────────────────
+  bff:
+    build: ../../ms-andesstay-bff
+    container_name: andesstay-bff
+    ports:
+      - "8080:8080"
+    environment:
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+      RESERVATIONS_URL: http://reservations:8081
+      CATALOG_URL: http://catalog:8082
+      REPORT_URL: http://report:8083
+      AUDIT_URL: http://audit:8084
+    networks:
+      - andesstay-apps
+    depends_on:
+      - reservations
+      - catalog
+
+  # ── Reservations ─────────────────────────────────────────────────────────────
+  reservations:
+    build: ../../ms-andesstay-reservations
+    container_name: andesstay-reservations
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:oracle:thin:@${ORACLE_HOST}:1521/${ORACLE_SERVICE}
+      SPRING_DATASOURCE_USERNAME: ${ORACLE_USER}
+      SPRING_DATASOURCE_PASSWORD: ${ORACLE_PASSWORD}
+      RABBITMQ_HOST: rabbitmq1
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASS: ${RABBITMQ_PASSWORD}
+      KAFKA_BOOTSTRAP: kafka1:29092,kafka2:29093,kafka3:29094
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+    networks:
+      - andesstay-apps
+      - andesstay-mq
+      - andesstay-kafka
+
+  # ── Catalog ──────────────────────────────────────────────────────────────────
+  catalog:
+    build: ../../ms-andesstay-catalog
+    container_name: andesstay-catalog
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:oracle:thin:@${ORACLE_HOST}:1521/${ORACLE_SERVICE}
+      SPRING_DATASOURCE_USERNAME: ${ORACLE_USER}
+      SPRING_DATASOURCE_PASSWORD: ${ORACLE_PASSWORD}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+    networks:
+      - andesstay-apps
+
+  # ── Notify ───────────────────────────────────────────────────────────────────
+  notify:
+    build: ../../ms-andesstay-notify
+    container_name: andesstay-notify
+    environment:
+      RABBITMQ_HOST: rabbitmq1
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASS: ${RABBITMQ_PASSWORD}
+      MAIL_HOST: ${MAIL_HOST}
+      MAIL_PORT: ${MAIL_PORT}
+      MAIL_USER: ${MAIL_USER}
+      MAIL_PASS: ${MAIL_PASS}
+    networks:
+      - andesstay-apps
+      - andesstay-mq
+
+  # ── Report ───────────────────────────────────────────────────────────────────
+  report:
+    build: ../../ms-andesstay-report
+    container_name: andesstay-report
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:oracle:thin:@${ORACLE_HOST}:1521/${ORACLE_SERVICE}
+      SPRING_DATASOURCE_USERNAME: ${ORACLE_USER}
+      SPRING_DATASOURCE_PASSWORD: ${ORACLE_PASSWORD}
+      KAFKA_BOOTSTRAP: kafka1:29092,kafka2:29093,kafka3:29094
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+    networks:
+      - andesstay-apps
+      - andesstay-kafka
+
+  # ── Audit ────────────────────────────────────────────────────────────────────
+  audit:
+    build: ../../ms-andesstay-audit
+    container_name: andesstay-audit
+    ports:
+      - "8084:8084"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:oracle:thin:@${ORACLE_HOST}:1521/${ORACLE_SERVICE}
+      SPRING_DATASOURCE_USERNAME: ${ORACLE_USER}
+      SPRING_DATASOURCE_PASSWORD: ${ORACLE_PASSWORD}
+      KAFKA_BOOTSTRAP: kafka1:29092,kafka2:29093,kafka3:29094
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+    networks:
+      - andesstay-apps
+      - andesstay-kafka
