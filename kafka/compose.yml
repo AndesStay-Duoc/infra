@@ -1,0 +1,166 @@
+version: "3.9"
+
+# Zookeeper 3 nodos + Kafka 3 brokers + Kafka UI
+# Puertos Kafka: 9092, 9093, 9094
+# Kafka UI: http://localhost:8090
+
+networks:
+  andesstay-kafka:
+    driver: bridge
+
+volumes:
+  zk1-data:
+  zk1-log:
+  zk2-data:
+  zk2-log:
+  zk3-data:
+  zk3-log:
+  kafka1-data:
+  kafka2-data:
+  kafka3-data:
+
+services:
+  # ── Zookeeper Ensemble ───────────────────────────────────────────────────────
+  zookeeper1:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: andesstay-zk1
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SERVER_ID: 1
+      ZOOKEEPER_SERVERS: "zookeeper1:2888:3888;zookeeper2:2888:3888;zookeeper3:2888:3888"
+    ports:
+      - "2181:2181"
+    volumes:
+      - zk1-data:/var/lib/zookeeper/data
+      - zk1-log:/var/lib/zookeeper/log
+    networks:
+      - andesstay-kafka
+
+  zookeeper2:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: andesstay-zk2
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2182
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SERVER_ID: 2
+      ZOOKEEPER_SERVERS: "zookeeper1:2888:3888;zookeeper2:2888:3888;zookeeper3:2888:3888"
+    ports:
+      - "2182:2181"
+    volumes:
+      - zk2-data:/var/lib/zookeeper/data
+      - zk2-log:/var/lib/zookeeper/log
+    networks:
+      - andesstay-kafka
+
+  zookeeper3:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: andesstay-zk3
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2183
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SERVER_ID: 3
+      ZOOKEEPER_SERVERS: "zookeeper1:2888:3888;zookeeper2:2888:3888;zookeeper3:2888:3888"
+    ports:
+      - "2183:2181"
+    volumes:
+      - zk3-data:/var/lib/zookeeper/data
+      - zk3-log:/var/lib/zookeeper/log
+    networks:
+      - andesstay-kafka
+
+  # ── Kafka Brokers ────────────────────────────────────────────────────────────
+  kafka1:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: andesstay-kafka1
+    depends_on: [zookeeper1, zookeeper2, zookeeper3]
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper1:2181,zookeeper2:2181,zookeeper3:2181"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    volumes:
+      - kafka1-data:/var/lib/kafka/data
+    networks:
+      - andesstay-kafka
+
+  kafka2:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: andesstay-kafka2
+    depends_on: [zookeeper1, zookeeper2, zookeeper3]
+    ports:
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 2
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper1:2181,zookeeper2:2181,zookeeper3:2181"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:29093,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    volumes:
+      - kafka2-data:/var/lib/kafka/data
+    networks:
+      - andesstay-kafka
+
+  kafka3:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: andesstay-kafka3
+    depends_on: [zookeeper1, zookeeper2, zookeeper3]
+    ports:
+      - "9094:9094"
+    environment:
+      KAFKA_BROKER_ID: 3
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper1:2181,zookeeper2:2181,zookeeper3:2181"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka3:29094,PLAINTEXT_HOST://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    volumes:
+      - kafka3-data:/var/lib/kafka/data
+    networks:
+      - andesstay-kafka
+
+  # ── Kafka Init (crea tópicos) ────────────────────────────────────────────────
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: andesstay-kafka-init
+    depends_on: [kafka1, kafka2, kafka3]
+    networks:
+      - andesstay-kafka
+    command: >
+      bash -c "
+        echo 'Esperando Kafka...' &&
+        cub kafka-ready -b kafka1:29092 3 60 &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka1:29092 --replication-factor 3 --partitions 3 --topic reservations.events &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka1:29092 --replication-factor 3 --partitions 3 --topic audit.timeline --config cleanup.policy=compact,delete &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka1:29092 --replication-factor 3 --partitions 3 --topic reservations.events.DLT &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka1:29092 --replication-factor 3 --partitions 3 --topic audit.timeline.DLT &&
+        echo 'Tópicos creados correctamente'
+      "
+
+  # ── Kafka UI ─────────────────────────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: andesstay-kafka-ui
+    depends_on: [kafka1, kafka2, kafka3]
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: andesstay
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka1:29092,kafka2:29093,kafka3:29094
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper1:2181
+    networks:
+      - andesstay-kafka
