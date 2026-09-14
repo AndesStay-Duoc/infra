@@ -24,6 +24,7 @@ services:
     environment:
       AZURE_TENANT_ID: ${AZURE_TENANT_ID}
       AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       RESERVATIONS_URL: http://reservations:8081
       CATALOG_URL: http://catalog:8082
       REPORT_URL: http://report:8083
