@@ -93,7 +93,10 @@ SSH_KEY="$EC2_SSH_KEY"
 # permisos POSIX no aplican, así que el chmod se intenta sin dar error si falla.
 chmod 600 "$SSH_KEY" 2>/dev/null || true
 
-SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10)
+# Mismo archivo de huellas que crear-infra.sh: al recrear la instancia, la IP
+# puede repetirse con otra huella y el known_hosts general bloquearía la conexión.
+SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10
+          -o UserKnownHostsFile="$HOME/.ssh/known_hosts_andesstay" -o LogLevel=ERROR)
 TARGET="$SSH_USER@$EC2_PUBLIC_IP"
 
 # ── 3. Copiar ────────────────────────────────────────────────────────────────
