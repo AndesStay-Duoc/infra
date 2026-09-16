@@ -1,0 +1,194 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AndesStay — server blocks
+#
+# Este archivo es una PLANTILLA. El entrypoint de la imagen de nginx la procesa
+# con envsubst al arrancar y escribe el resultado en /etc/nginx/conf.d/. Solo se
+# sustituyen las variables listadas en NGINX_ENVSUBST_FILTER (GATEWAY_SECRET,
+# PUBLIC_API_ORIGIN y PUBLIC_WEB_ORIGIN); las de nginx como $uri o $host quedan
+# intactas.
+#
+# IMPORTANTE — CORS: este archivo NO emite cabeceras Access-Control-*.
+# Las emite AWS API Gateway, que es el origen que ve el navegador, y el BFF
+# tiene además su propio CorsConfigurationSource. Agregarlas aquí produciría
+# cabeceras Access-Control-Allow-Origin duplicadas, que el navegador rechaza con
+# el mismo error de CORS que se intentaba resolver.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Comprueba la cabecera compartida que inyecta API Gateway. El puerto 80 está
+# abierto a internet porque las integraciones de API Gateway salen desde IPs de
+# AWS que no se pueden acotar en un Security Group; esta cabecera es lo que
+# impide llegar al BFF saltándose el gateway.
+map $http_x_gateway_secret $gateway_authorized {
+    default              0;
+    "${GATEWAY_SECRET}"  1;
+}
+
+upstream bff_upstream {
+    server bff:8080;
+    keepalive 16;
+}
+
+# ── HTTP :80 ─────────────────────────────────────────────────────────────────
+# Es el puerto que consume API Gateway. No redirige a HTTPS a propósito: la
+# integración viaja por HTTP dentro de AWS y una redirección 301 la rompería.
+server {
+    listen 80 default_server;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Cabeceras de seguridad. La CSP corresponde a la tarea D.6 del plan de
+    # auditoría de identidad: MSAL necesita alcanzar login.microsoftonline.com
+    # y el frontend necesita alcanzar el API Gateway; index.html carga Google
+    # Fonts, de ahí font-src y style-src de terceros.
+    add_header Content-Security-Policy "default-src 'self'; connect-src 'self' https://login.microsoftonline.com ${PUBLIC_API_ORIGIN}; frame-src https://login.microsoftonline.com; font-src 'self' https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Frame-Options "DENY" always;
+
+    # ── Health check del contenedor ──────────────────────────────────────────
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # ── Configuración en runtime de la SPA ───────────────────────────────────
+    # La genera el entrypoint del contenedor a partir de las variables de
+    # entorno. Nunca se cachea: es justo lo que cambia cuando el Learner Lab
+    # reinicia y aparecen IDs de API Gateway nuevos.
+    location = /assets/config.json {
+        add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        default_type application/json;
+        try_files $uri =404;
+    }
+
+    # ── Estáticos con hash de contenido ──────────────────────────────────────
+    # Va ANTES del fallback de la SPA. Si un chunk lazy que no existe recibiera
+    # index.html con Content-Type text/html, el navegador rechazaría el módulo
+    # y la aplicación quedaría en blanco sin un error claro. Con =404 el fallo
+    # es explícito.
+    #
+    # Se usa "expires" y no "add_header Cache-Control", porque add_header en una
+    # location descarta las cabeceras heredadas del server.
+    location ~* \.(?:js|mjs|css|woff2?|ttf|eot|png|jpe?g|gif|svg|ico|webp|map)$ {
+        try_files $uri =404;
+        expires 1y;
+        access_log off;
+    }
+
+    # ── API: rutas del gateway ───────────────────────────────────────────────
+    # Traduce el contrato público /staff/* y /guest/* al /api/* que entiende el
+    # BFF. Hacerlo aquí permite que las 16 rutas de API Gateway compartan una
+    # sola integración (ANY http://<ip>/{proxy}) y deja la traducción
+    # versionada en git en lugar de en la consola de AWS.
+    location ~ ^/(staff|guest)/(.*)$ {
+        if ($gateway_authorized = 0) { return 403; }
+
+        proxy_pass http://bff_upstream/api/$2$is_args$args;
+        include /etc/nginx/snippets/proxy-common.conf;
+    }
+
+    # Acceso directo a /api/** — lo usan las pruebas con curl desde la propia
+    # instancia y el tramo local de depuración. Exige la misma cabecera.
+    location /api/ {
+        if ($gateway_authorized = 0) { return 403; }
+
+        proxy_pass http://bff_upstream;
+        include /etc/nginx/snippets/proxy-common.conf;
+    }
+
+    # ── SPA: fallback de rutas del router de Angular ─────────────────────────
+    # El router usa PathLocationStrategy con rutas anidadas (/dashboard,
+    # /reservations, /catalog, /reports, /audit) e index.html trae <base href="/">.
+    # Sin este try_files, recargar cualquiera de esas rutas devuelve 404.
+    location / {
+        try_files $uri $uri/ /index.html;
+
+        # add_header descarta lo heredado del server, así que se repite todo.
+        add_header Cache-Control "no-store" always;
+        add_header Content-Security-Policy "default-src 'self'; connect-src 'self' https://login.microsoftonline.com ${PUBLIC_API_ORIGIN}; frame-src https://login.microsoftonline.com; font-src 'self' https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header X-Frame-Options "DENY" always;
+    }
+}
+
+# ── HTTPS :443 ───────────────────────────────────────────────────────────────
+# Certificado autofirmado, para acceso administrativo directo a la instancia.
+# NO está en la ruta del login: API Gateway no integra contra backends con
+# certificado no confiable, y Entra ID no acepta redirect URI con IP cruda. El
+# TLS que ve el navegador lo entrega API Gateway con su certificado de AWS.
+#
+# Para pasar a Let's Encrypt cuando exista un dominio, ver la sección 12.1 de
+# docs/DESPLIEGUE-EC2.md: basta reemplazar las dos rutas de certificado.
+server {
+    listen 443 ssl default_server;
+    http2 on;
+    server_name _;
+
+    ssl_certificate     /etc/nginx/certs/andesstay.crt;
+    ssl_certificate_key /etc/nginx/certs/andesstay.key;
+
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Sin HSTS: con un certificado autofirmado, fijar HSTS en el navegador deja
+    # el host inaccesible hasta que expire la política. Se activa junto con
+    # Let's Encrypt, no antes.
+    add_header Content-Security-Policy "default-src 'self'; connect-src 'self' https://login.microsoftonline.com ${PUBLIC_API_ORIGIN}; frame-src https://login.microsoftonline.com; font-src 'self' https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Frame-Options "DENY" always;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location = /assets/config.json {
+        add_header Cache-Control "no-store" always;
+        default_type application/json;
+        try_files $uri =404;
+    }
+
+    location ~* \.(?:js|mjs|css|woff2?|ttf|eot|png|jpe?g|gif|svg|ico|webp|map)$ {
+        try_files $uri =404;
+        expires 1y;
+        access_log off;
+    }
+
+    location ~ ^/(staff|guest)/(.*)$ {
+        if ($gateway_authorized = 0) { return 403; }
+
+        proxy_pass http://bff_upstream/api/$2$is_args$args;
+        include /etc/nginx/snippets/proxy-common.conf;
+    }
+
+    location /api/ {
+        if ($gateway_authorized = 0) { return 403; }
+
+        proxy_pass http://bff_upstream;
+        include /etc/nginx/snippets/proxy-common.conf;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+
+        add_header Cache-Control "no-store" always;
+        add_header Content-Security-Policy "default-src 'self'; connect-src 'self' https://login.microsoftonline.com ${PUBLIC_API_ORIGIN}; frame-src https://login.microsoftonline.com; font-src 'self' https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header X-Frame-Options "DENY" always;
+    }
+}

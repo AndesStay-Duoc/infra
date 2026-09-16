@@ -1,5 +1,23 @@
 # Guía — Configuración de identidad en Azure
 
+> **Desactualizada — 2026-09-16.** Esta guía describe el esquema de **dos app
+> registrations** (`AndesStay-Staff` y `AndesStay-Guest`, con los scopes
+> `access_as_staff` y `access_as_guest`) sobre el tenant
+> `cfe8706e-e5ae-44dd-8092-b4941bda8bd9`. **Nada de eso es lo que usa el
+> sistema.**
+>
+> La decisión D3 del 2026-09-14 dejó **una sola app registration**
+> (`704a544f-3d92-44f5-aef9-8559574cff34`) en el tenant
+> `055d11d1-8ae0-4221-a6f7-b50be0a623b4`, con el scope único
+> `AndesStay.Access`. `AndesStay-Guest` nunca se creó y no hace falta.
+>
+> Los identificadores vigentes y los pasos de configuración que sí aplican están
+> en [`../idaas/tenants.md`](../idaas/tenants.md). Seguir los pasos de abajo
+> configura el tenant equivocado.
+>
+> Se conserva como registro de las alternativas evaluadas y de por qué se
+> descartó el segundo tenant.
+
 Paso a paso para dejar operativa la identidad de AndesStay. Es el trabajo de la Fase 1 y el de
 mayor peso de todo el proyecto: **60% de la EP1 y 45% de la EP2**.
 

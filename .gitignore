@@ -20,3 +20,8 @@ oradata/
 # --- Sistema operativo ---
 .DS_Store
 Thumbs.db
+
+# Carpeta de secretos compartida del equipo. Vive fuera de los repositorios
+# (AndesStay/secrets, sincronizada por OneDrive); esta regla solo cubre el caso
+# de que alguien la copie dentro de un repo por error.
+secrets/
