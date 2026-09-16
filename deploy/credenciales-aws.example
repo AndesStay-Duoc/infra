@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Plantilla de credenciales del AWS Academy Learner Lab
+#
+# ⚠ NO PEGAR LAS CREDENCIALES EN ESTE ARCHIVO. Este archivo SÍ se sube a git y el
+#   repositorio es público. Las credenciales van en una COPIA llamada
+#   credenciales-aws.txt, que git ignora.
+#
+# 1. Copiar este archivo como credenciales-aws.txt, en esta misma carpeta:
+#
+#      cp credenciales-aws.example credenciales-aws.txt
+#
+# 2. En el Learner Lab: Start Lab, esperar el círculo verde, y pulsar
+#    AWS Details → AWS CLI → Show. Copiar las tres líneas y pegarlas en
+#    credenciales-aws.txt, reemplazando los valores de ejemplo. Sin comillas y sin
+#    espacios alrededor del signo igual.
+#
+# 3. Cargarlas en el perfil "andesstay":
+#
+#      bash scripts/aws-session.sh
+#
+# Las credenciales caducan a las ~4 horas o al pulsar End Lab. Cuando eso pasa,
+# se repiten los pasos 2 y 3: el archivo se sobrescribe, no se crea otro.
+#
+# Cada integrante usa su propio laboratorio y sus propias credenciales. No se
+# comparten: pertenecen a la cuenta AWS de quien abrió la sesión.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[default]
+aws_access_key_id=ASIAXXXXXXXXXXXXXXXX
+aws_secret_access_key=REEMPLAZAR_CON_EL_VALOR_DEL_LABORATORIO
+aws_session_token=REEMPLAZAR_CON_EL_TOKEN_COMPLETO_DEL_LABORATORIO

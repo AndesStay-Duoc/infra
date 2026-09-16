@@ -25,3 +25,9 @@ Thumbs.db
 # (AndesStay/secrets, sincronizada por OneDrive); esta regla solo cubre el caso
 # de que alguien la copie dentro de un repo por error.
 secrets/
+
+# Credenciales del Learner Lab y estado de la infraestructura: pertenecen a cada
+# integrante y a su propia cuenta AWS, nunca se comparten ni se versionan
+deploy/credenciales-aws.txt
+deploy/.estado-aws.env
+deploy/.estado-aws.env.bak.*

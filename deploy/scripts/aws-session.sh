@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# AndesStay — carga las credenciales del AWS Learner Lab (WSL, macOS, Linux)
+# AndesStay — carga las credenciales del AWS Learner Lab en el perfil "andesstay"
 #
-# Equivalente de aws-session.ps1 para entornos POSIX. Lee por la entrada
-# estándar el bloque de "AWS Details -> AWS CLI" y escribe el perfil en
-# ~/.aws/credentials.
+# Lee el bloque de "AWS Details -> AWS CLI" y escribe el perfil en
+# ~/.aws/credentials. Funciona en Git Bash (Windows), WSL, macOS y Linux.
+#
+# Orden en que busca las credenciales:
+#   1. el archivo pasado como argumento,
+#   2. infra/deploy/credenciales-aws.txt, creado desde credenciales-aws.example,
+#   3. lo que se pegue por la entrada estándar.
 #
 # Estas credenciales caducan a las ~4 horas y NO se comparten con el equipo:
-# cada integrante abre su propio laboratorio y ejecuta este script.
+# cada integrante abre su propio laboratorio y carga las suyas.
 #
 # Uso:
-#   bash aws-session.sh              # pega el bloque y termina con Ctrl+D
-#   pbpaste | bash aws-session.sh    # macOS
-#   cat credenciales.txt | bash aws-session.sh
+#   bash scripts/aws-session.sh                       # lee credenciales-aws.txt
+#   bash scripts/aws-session.sh otro-archivo.txt
+#   pbpaste | bash scripts/aws-session.sh -           # desde la entrada estándar
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -22,13 +26,43 @@ AWS_DIR="$HOME/.aws"
 CREDS="$AWS_DIR/credentials"
 CONFIG="$AWS_DIR/config"
 
-if [[ -t 0 ]]; then
-    echo ""
-    echo "Pegar el bloque de AWS Details -> AWS CLI y terminar con Ctrl+D:"
-    echo ""
+DEFAULT_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/credenciales-aws.txt"
+TEMPLATE_FILE="${DEFAULT_FILE%.txt}.example"
+
+# Protección: la plantilla SÍ está versionada y el repositorio es público. Pegar
+# las credenciales en ella en vez de en la copia es un error fácil de cometer, y
+# un commit posterior las publicaría. Se detiene antes de que llegue a pasar.
+if [[ -f "$TEMPLATE_FILE" ]] && grep -qE '^aws_access_key_id=ASIA[A-Z0-9]{16}$' "$TEMPLATE_FILE" \
+   && ! grep -q 'XXXX' "$TEMPLATE_FILE"; then
+    echo "[error] credenciales-aws.example contiene credenciales reales." >&2
+    echo "        Ese archivo se sube a git y el repositorio es público." >&2
+    echo "        Moverlas a credenciales-aws.txt y restaurar la plantilla:" >&2
+    echo "          cp credenciales-aws.example credenciales-aws.txt" >&2
+    echo "          git checkout -- credenciales-aws.example" >&2
+    exit 1
 fi
 
-INPUT="$(cat)"
+# Prioridad: argumento, luego el archivo por defecto, y solo si no existe se lee
+# la entrada estándar. "-" como argumento fuerza la entrada estándar, para usar
+# el script con una tubería aunque exista credenciales-aws.txt.
+if [[ "${1:-}" == "-" ]]; then
+    INPUT="$(cat)"
+elif [[ -n "${1:-}" ]]; then
+    [[ -f "$1" ]] || { echo "[error] No existe $1" >&2; exit 1; }
+    INPUT="$(cat "$1")"
+    echo "Leyendo $1"
+elif [[ -f "$DEFAULT_FILE" ]]; then
+    INPUT="$(cat "$DEFAULT_FILE")"
+    echo "Leyendo $DEFAULT_FILE"
+else
+    if [[ -t 0 ]]; then
+        echo ""
+        echo "No existe $DEFAULT_FILE."
+        echo "Pegar el bloque de AWS Details -> AWS CLI y terminar con Ctrl+D:"
+        echo ""
+    fi
+    INPUT="$(cat)"
+fi
 
 [[ -z "$INPUT" ]] && { echo "[error] No se recibió ninguna línea." >&2; exit 1; }
 
@@ -42,6 +76,13 @@ extract() {
 KEY_ID=$(extract aws_access_key_id)
 SECRET=$(extract aws_secret_access_key)
 TOKEN=$(extract aws_session_token)
+
+# La plantilla trae valores de ejemplo: si siguen ahí, no se completó el archivo
+if [[ "$KEY_ID" == *XXXX* || "$SECRET" == REEMPLAZAR* || "$TOKEN" == REEMPLAZAR* ]]; then
+    echo "[error] credenciales-aws.txt todavía tiene los valores de la plantilla." >&2
+    echo "        Pegar ahí el bloque de AWS Details -> AWS CLI del laboratorio." >&2
+    exit 1
+fi
 
 MISSING=""
 [[ -z "$KEY_ID" ]] && MISSING="$MISSING aws_access_key_id"
@@ -93,10 +134,15 @@ fi
 echo ""
 echo "Perfil '$PROFILE' actualizado en $CREDS"
 
+# Un Git Bash abierto antes de instalar el CLI no tiene su ruta en el PATH
+if ! command -v aws > /dev/null 2>&1 && [[ -x "/c/Program Files/Amazon/AWSCLIV2/aws.exe" ]]; then
+    export PATH="$PATH:/c/Program Files/Amazon/AWSCLIV2"
+fi
+
 if command -v aws > /dev/null 2>&1; then
     echo "Verificando la sesión..."
     if aws sts get-caller-identity --profile "$PROFILE" --output text \
-        --query 'join(`  `, [Account, Arn])' 2>/dev/null; then
+        --query '[Account, Arn]' 2>/dev/null; then
         echo ""
         echo "Usar con: aws --profile $PROFILE <comando>"
     else

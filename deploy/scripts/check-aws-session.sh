@@ -12,6 +12,10 @@ set -uo pipefail
 
 PROFILE="${AWS_PROFILE_NAME:-andesstay}"
 
+if ! command -v aws > /dev/null 2>&1 && [[ -x "/c/Program Files/Amazon/AWSCLIV2/aws.exe" ]]; then
+    export PATH="$PATH:/c/Program Files/Amazon/AWSCLIV2"
+fi
+
 command -v aws > /dev/null 2>&1 || {
     echo "[error] El AWS CLI no está instalado." >&2
     exit 1
@@ -46,8 +50,8 @@ if [[ $STATUS -ne 0 ]]; then
 
     echo ""
     echo "Solución: abrir el Learner Lab, copiar el bloque de AWS Details -> AWS CLI y ejecutar"
-    echo "  Windows : .\aws-session.ps1"
-    echo "  POSIX   : bash aws-session.sh"
+    echo "  Windows : powershell -File scripts/aws-session.ps1"
+    echo "  Git Bash: bash scripts/aws-session.sh"
     exit 1
 fi
 

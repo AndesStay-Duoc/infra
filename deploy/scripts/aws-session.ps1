@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Carga las credenciales temporales del AWS Learner Lab en el perfil "andesstay".
 
@@ -15,8 +15,11 @@
     abre su propio laboratorio y ejecuta este script.
 
 .EXAMPLE
-    .\aws-session.ps1
-    Pide pegar el bloque y terminar con una línea en blanco.
+    powershell -File infra\deploy\scripts\aws-session.ps1
+    Lee infra\deploy\credenciales-aws.txt si existe; si no, pide pegar el bloque.
+
+.EXAMPLE
+    .\aws-session.ps1 -Archivo C:\ruta\credenciales.txt
 
 .EXAMPLE
     Get-Clipboard | .\aws-session.ps1
@@ -34,6 +37,9 @@ param(
     # El Learner Lab solo opera en esta región
     [string] $Region = 'us-east-1',
 
+    # Archivo con el bloque del laboratorio. Por defecto, deploy\credenciales-aws.txt
+    [string] $Archivo = '',
+
     [Parameter(ValueFromPipeline = $true)]
     [string[]] $InputLines
 )
@@ -48,7 +54,18 @@ process {
 }
 
 end {
-    # Sin entrada por tubería, se pide pegar el bloque de forma interactiva
+    # Sin entrada por tubería: primero el archivo indicado o la plantilla completada
+    if ($collected.Count -eq 0) {
+        if (-not $Archivo) {
+            $Archivo = Join-Path (Split-Path $PSScriptRoot -Parent) 'credenciales-aws.txt'
+        }
+        if (Test-Path $Archivo) {
+            Write-Host "Leyendo $Archivo" -ForegroundColor DarkGray
+            Get-Content $Archivo | ForEach-Object { $collected.Add($_) }
+        }
+    }
+
+    # Y si tampoco hay archivo, se pide pegar el bloque de forma interactiva
     if ($collected.Count -eq 0) {
         Write-Host ''
         Write-Host 'Pegar el bloque de AWS Details -> AWS CLI y terminar con una línea en blanco:' -ForegroundColor Cyan
@@ -81,6 +98,11 @@ end {
 
     if ($missing) {
         throw "Faltan claves en el bloque pegado: $($missing -join ', ')"
+    }
+
+    # La plantilla trae valores de ejemplo: si siguen ahí, no se completó el archivo
+    if ($creds['aws_access_key_id'] -like '*XXXX*' -or $creds['aws_secret_access_key'] -like 'REEMPLAZAR*') {
+        throw 'credenciales-aws.txt todavía tiene los valores de la plantilla. Pegar ahí el bloque de AWS Details -> AWS CLI.'
     }
 
     # Las credenciales temporales de STS empiezan por ASIA. Una que empiece por
@@ -128,18 +150,34 @@ end {
 
     # La región se fija en config, que es donde la busca el CLI
     if (-not (Test-Path $confIn) -or -not (Select-String -Path $confIn -Pattern "^\[profile $ProfileName\]" -Quiet)) {
-        Add-Content -Path $confIn -Value "`n[profile $ProfileName]`nregion=$Region`noutput=json" -Encoding utf8
+        # AppendAllText sin BOM: Add-Content -Encoding utf8 de Windows PowerShell 5.1
+        # antepone un BOM al crear el archivo, y el CLI ya no reconoce la sección.
+        [System.IO.File]::AppendAllText($confIn, "`n[profile $ProfileName]`nregion=$Region`noutput=json`n",
+            (New-Object System.Text.UTF8Encoding($false)))
     }
 
     Write-Host ''
     Write-Host "Perfil '$ProfileName' actualizado en $credsIn" -ForegroundColor Green
 
     # ── Verificación ─────────────────────────────────────────────────────────
+    # Una terminal abierta antes de instalar el CLI no tiene su ruta en el PATH
+    $awsDefault = 'C:\Program Files\Amazon\AWSCLIV2'
+    if (-not (Get-Command aws -ErrorAction SilentlyContinue) -and (Test-Path "$awsDefault\aws.exe")) {
+        $env:Path = "$env:Path;$awsDefault"
+    }
+
     if (Get-Command aws -ErrorAction SilentlyContinue) {
         Write-Host 'Verificando la sesión...' -ForegroundColor Cyan
+        # Con ErrorActionPreference en Stop, el 2>&1 convierte el stderr de aws.exe
+        # en un error terminante y el script abortaría justo cuando las
+        # credenciales son inválidas, que es el caso que interesa informar.
+        $previo = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
         $identity = & aws sts get-caller-identity --profile $ProfileName --output json 2>&1
+        $codigo = $LASTEXITCODE
+        $ErrorActionPreference = $previo
 
-        if ($LASTEXITCODE -eq 0) {
+        if ($codigo -eq 0) {
             $parsed = $identity | ConvertFrom-Json
             Write-Host "  Cuenta : $($parsed.Account)" -ForegroundColor Green
             Write-Host "  Rol    : $($parsed.Arn)"     -ForegroundColor Green
