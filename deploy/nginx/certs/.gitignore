@@ -1,0 +1,6 @@
+# Los certificados los genera gen-selfsigned-cert.sh en cada instancia.
+# La clave privada no se versiona nunca.
+*.crt
+*.key
+*.pem
+!.gitignore

@@ -1,0 +1,233 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AndesStay — despliegue completo en una sola instancia EC2 (Ubuntu 24.04)
+#
+# Reemplaza a infra/apps/compose.yml para el entorno cloud. Diferencias:
+#   · Una sola red interna, sin redes "external" de Kafka ni RabbitMQ.
+#   · MySQL en contenedor, coherente con el driver que usan los application.yml.
+#   · Solo nginx publica puertos. Los microservicios y la base quedan aislados.
+#   · Healthchecks y depends_on por condición, para un arranque determinista.
+#
+# Uso (desde /opt/andesstay):
+#   docker compose --env-file .env -f infra/deploy/compose.yml up -d
+#
+# Requiere que los repositorios estén clonados como hermanos de "infra".
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: andesstay
+
+networks:
+  andesstay:
+    driver: bridge
+
+volumes:
+  mysql-data:
+
+# Opciones comunes a los cinco servicios Spring Boot. MaxRAMPercentage hace que
+# la JVM respete el mem_limit del contenedor en lugar de mirar la RAM del host,
+# y SerialGC baja el consumo en instancias de pocos núcleos.
+x-jvm: &jvm-opts
+  JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70 -XX:+UseSerialGC -Xss512k"
+
+x-azure: &azure-env
+  AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+  AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+
+# Conexión a MySQL. El compose anterior inyectaba aquí una URL jdbc:oracle:thin
+# que ningún servicio podía abrir: los pom solo traen mysql-connector-j y los
+# application.yml fijan MySQLDialect.
+x-datasource: &datasource-env
+  SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8
+  SPRING_DATASOURCE_USERNAME: ${MYSQL_APP_USER}
+  SPRING_DATASOURCE_PASSWORD: ${MYSQL_APP_PASSWORD}
+
+services:
+
+  # ── Base de datos ──────────────────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: andesstay-mysql
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+00:00
+      # Con una sola instancia pequeña no hay razón para el buffer pool por defecto
+      - --innodb-buffer-pool-size=128M
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_APP_USER}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+    networks: [andesstay]
+    mem_limit: 512m
+    healthcheck:
+      # El doble $ evita que Compose interpole la variable: la resuelve el shell
+      # del contenedor, así la contraseña no queda en el archivo.
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root --password=$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  # ── Microservicios de dominio ──────────────────────────────────────────────
+  reservations:
+    build:
+      context: ../../ms-andesstay-reservations
+    container_name: andesstay-reservations
+    restart: unless-stopped
+    environment:
+      <<: [*jvm-opts, *azure-env, *datasource-env]
+      # El application.yml apunta por defecto a catalog-svc:8082, host que no
+      # existe en esta red. Sin esta variable, reservations no puede consultar
+      # disponibilidad y toda creación de reserva falla.
+      CATALOG_BASE_URL: http://catalog:8082
+      # Sin Kafka ni RabbitMQ desplegados, los publicadores de eventos quedan
+      # desactivados. Ver ReservationEventPublisher y NotificationPublisher.
+      ANDESSTAY_EVENTS_ENABLED: "false"
+      # Va de la mano con la línea anterior. Actuator registra un health
+      # indicator de RabbitMQ en cuanto ve spring-boot-starter-amqp en el
+      # classpath; sin broker lo marca DOWN y /actuator/health devuelve 503,
+      # con lo que el contenedor entero queda "unhealthy" aunque la aplicación
+      # funcione. Al reactivar los eventos, esta línea se quita también.
+      MANAGEMENT_HEALTH_RABBIT_ENABLED: "false"
+    depends_on:
+      mysql: {condition: service_healthy}
+    networks: [andesstay]
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8081/actuator/health | grep -q UP"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
+  catalog:
+    build:
+      context: ../../ms-andesstay-catalog
+    container_name: andesstay-catalog
+    restart: unless-stopped
+    environment:
+      <<: [*jvm-opts, *azure-env, *datasource-env]
+    depends_on:
+      mysql: {condition: service_healthy}
+    networks: [andesstay]
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/actuator/health | grep -q UP"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
+  report:
+    build:
+      context: ../../ms-andesstay-report
+    container_name: andesstay-report
+    restart: unless-stopped
+    environment:
+      <<: [*jvm-opts, *azure-env, *datasource-env]
+      # Impide que los @KafkaListener arranquen y reintenten conectarse contra un
+      # broker inexistente. Los endpoints REST siguen sirviendo desde MySQL.
+      SPRING_KAFKA_LISTENER_AUTO_STARTUP: "false"
+    depends_on:
+      mysql: {condition: service_healthy}
+    networks: [andesstay]
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8083/actuator/health | grep -q UP"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
+  audit:
+    build:
+      context: ../../ms-andesstay-audit
+    container_name: andesstay-audit
+    restart: unless-stopped
+    environment:
+      <<: [*jvm-opts, *azure-env, *datasource-env]
+      SPRING_KAFKA_LISTENER_AUTO_STARTUP: "false"
+    depends_on:
+      mysql: {condition: service_healthy}
+    networks: [andesstay]
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8084/actuator/health | grep -q UP"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
+  # ── BFF / Spring Cloud Gateway ─────────────────────────────────────────────
+  bff:
+    build:
+      context: ../../ms-andesstay-bff
+    container_name: andesstay-bff
+    restart: unless-stopped
+    environment:
+      <<: [*jvm-opts, *azure-env]
+      RESERVATIONS_URL: http://reservations:8081
+      CATALOG_URL: http://catalog:8082
+      REPORT_URL: http://report:8083
+      AUDIT_URL: http://audit:8084
+      # Origen exacto desde el que el navegador carga la SPA. Sin comodines: la
+      # rúbrica penaliza los sobrepermisos de CORS.
+      #
+      # El :- cubre el caso de PUBLIC_WEB_ORIGIN vacío, que se da mientras los
+      # HTTP API todavía no existen. Sin él, el BFF recibiría la propiedad
+      # definida pero vacía: el valor por defecto del @Value solo actúa cuando
+      # la propiedad FALTA, así que la lista de orígenes quedaría vacía y CORS
+      # rechazaría todo sin dejar claro el motivo.
+      CORS_ALLOWED_ORIGINS: ${PUBLIC_WEB_ORIGIN:-http://localhost:4200}
+    depends_on:
+      reservations: {condition: service_started}
+      catalog: {condition: service_started}
+      report: {condition: service_started}
+      audit: {condition: service_started}
+    networks: [andesstay]
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/actuator/health | grep -q UP"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
+  # ── Nginx: sirve la SPA y hace de reverse proxy hacia el BFF ───────────────
+  web:
+    build:
+      context: ../../frontend-andesstay
+    container_name: andesstay-web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Consumidas por la plantilla de nginx y por el generador de config.json
+      GATEWAY_SECRET: ${GATEWAY_SECRET}
+      PUBLIC_API_ORIGIN: ${PUBLIC_API_ORIGIN}
+      PUBLIC_WEB_ORIGIN: ${PUBLIC_WEB_ORIGIN}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+      # Restringe envsubst a estas tres variables, para que no toque las de
+      # nginx ($uri, $host, $remote_addr...) al procesar las plantillas.
+      NGINX_ENVSUBST_FILTER: "^(GATEWAY_SECRET|PUBLIC_API_ORIGIN|PUBLIC_WEB_ORIGIN)$$"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/templates:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      bff: {condition: service_started}
+    networks: [andesstay]
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz | grep -q ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
