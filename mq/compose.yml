@@ -1,7 +1,27 @@
-version: "3.9"
-
-# RabbitMQ cluster - 2 nodos
-# Puertos: AMQP 5672 (nodo1), 5673 (nodo2) | Management UI 15672 (nodo1)
+# ─────────────────────────────────────────────────────────────────────────────
+# AndesStay — RabbitMQ y el consumidor de notificaciones
+#
+# Clúster de 2 nodos, como pide el caso, más ms-andesstay-notify.
+# En la nube este compose corre en la instancia ec2-mq (t3.micro, 1 GB).
+#
+# Uso en local, solo el broker:
+#   docker compose --env-file .env -f infra/mq/compose.yml up -d rabbitmq1 rabbitmq2 rabbitmq-init
+#
+# Uso completo (construye la imagen de notify, que en una t3.micro NO cabe: un mvn package
+# de Spring Boot supera el gigabyte de pico. Allí la imagen se construye en ec2-apps y se
+# mueve con docker save | docker load):
+#   docker compose --env-file .env -f infra/mq/compose.yml up -d
+#
+# Puertos: AMQP 5672 (nodo 1), 5673 (nodo 2).
+# La Management UI se publica SOLO en loopback: un puerto publicado por Docker omite ufw,
+# porque la regla entra por la cadena DOCKER-USER, así que la única protección real sería
+# el Security Group. Con el bind a 127.0.0.1 el túnel SSH es la vía única:
+#   ssh -i ~/.ssh/andesstay-key.pem -L 15672:localhost:15672 ubuntu@<ip-de-ec2-mq>
+#
+# La topología (3 exchanges, 6 colas, 9 bindings) NO está aquí ni en un archivo de
+# definiciones: la declara ms-andesstay-notify con @Bean. Ver su RabbitMQConfig y
+# infra/docs/validacion/rabbitmq.md.
+# ─────────────────────────────────────────────────────────────────────────────
 
 networks:
   andesstay-mq:
@@ -11,43 +31,53 @@ volumes:
   rabbitmq1-data:
   rabbitmq2-data:
 
+x-rabbit-env: &rabbit-env
+  RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+  RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+  RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE}
+  RABBITMQ_DEFAULT_VHOST: andesstay
+
+# El ping solo comprueba el nodo Erlang y da healthy ANTES de que la API de gestión escuche
+# en el 15672. Por eso se comprueban las dos cosas: rabbitmq-init llama a esa API y, con el
+# ping a secas, se encontraba el puerto cerrado.
+x-rabbit-health: &rabbit-health
+  test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_port_connectivity"]
+  interval: 15s
+  timeout: 15s
+  retries: 10
+  start_period: 40s
+
 services:
+
   rabbitmq1:
     image: rabbitmq:3.13-management
     hostname: rabbitmq1
     container_name: andesstay-rabbitmq1
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
-      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE}
-      RABBITMQ_DEFAULT_VHOST: andesstay
+    restart: unless-stopped
+    environment: *rabbit-env
     ports:
       - "5672:5672"
-      - "15672:15672"
+      - "127.0.0.1:15672:15672"
     volumes:
       - rabbitmq1-data:/var/lib/rabbitmq
-      - ./rabbitmq-definitions.json:/etc/rabbitmq/definitions.json:ro
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
     networks:
       - andesstay-mq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+    # Con 1 GB en la t3.micro los tres contenedores necesitan techo explícito, o el OOM
+    # killer elige por su cuenta. El swapfile de 2 GB que crea provision.sh es lo que
+    # hace viable este reparto.
+    mem_limit: 300m
+    healthcheck: *rabbit-health
 
   rabbitmq2:
     image: rabbitmq:3.13-management
     hostname: rabbitmq2
     container_name: andesstay-rabbitmq2
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
-      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE}
-      RABBITMQ_DEFAULT_VHOST: andesstay
+    restart: unless-stopped
+    environment: *rabbit-env
     ports:
       - "5673:5672"
-      - "15673:15672"
+      - "127.0.0.1:15673:15672"
     volumes:
       - rabbitmq2-data:/var/lib/rabbitmq
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
@@ -56,15 +86,99 @@ services:
         condition: service_healthy
     networks:
       - andesstay-mq
+    mem_limit: 300m
+    healthcheck: *rabbit-health
+    # Ya NO se sobrescribe el command con stop_app / join_cluster / start_app.
+    #
+    # Ese bloque duplicaba el cluster_formation.classic_config que rabbitmq.conf ya declara,
+    # dependía de un "sleep 15" fijo que en una instancia burstable es una carrera, y al
+    # reemplazar el entrypoint por "rabbitmq-server & … & tail -f /dev/null" rompía el manejo
+    # de señales. El descubrimiento por classic_config hace el join solo, en el primer
+    # arranque de un nodo en blanco.
+
+  # Aplica la política de alta disponibilidad por la API de gestión, una sola vez.
+  #
+  # No puede ir en un archivo de definiciones: cargar definiciones hace que RabbitMQ renuncie
+  # a crear el usuario y el vhost por omisión, y lo dice en su log con todas las letras ("Will
+  # not seed default virtual host and user: have definitions to load"). Declarar el usuario en
+  # ese archivo exigiría versionar su password_hash. Con la política por API, el usuario lo
+  # sigue creando RABBITMQ_DEFAULT_USER y no hay ningún secreto en git.
+  #
+  # El PUT es idempotente, así que repetirlo en cada "up" no molesta.
+  rabbitmq-init:
+    image: curlimages/curl:8.11.1
+    container_name: andesstay-rabbitmq-init
+    restart: "no"
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+    networks:
+      - andesstay-mq
+    # Los reintentos son necesarios aunque el healthcheck ya compruebe el puerto: el nodo
+    # acepta conexiones unos instantes antes de servir /api.
+    command:
+      - "--fail"
+      - "--silent"
+      - "--show-error"
+      - "--retry"
+      - "15"
+      - "--retry-delay"
+      - "2"
+      - "--retry-connrefused"
+      - "--retry-all-errors"
+      - "-u"
+      - "${RABBITMQ_USER}:${RABBITMQ_PASSWORD}"
+      - "-X"
+      - "PUT"
+      - "http://rabbitmq1:15672/api/policies/andesstay/ha-colas-cmd"
+      - "-H"
+      - "content-type: application/json"
+      # Sin esta política, cada cola clásica vive en un solo nodo y desaparece del servicio si
+      # ese nodo cae, que es justo lo que el clúster de dos nodos pretendía evitar.
+      #
+      # El espejado de colas clásicas está deprecado desde la 3.13 y eliminado en la serie 4.x.
+      # La alternativa moderna son las colas quorum, pero con DOS nodos no aportan nada:
+      # necesitan mayoría, y la mayoría de dos es dos, así que perder un nodo deja la cola
+      # igual de indisponible. Con el clúster de dos nodos que pide el caso, el espejado
+      # clásico es la única opción que da tolerancia real a la caída de un nodo.
+      - "-d"
+      - '{"pattern":"^q\\.cmd\\.","apply-to":"queues","priority":0,"definition":{"ha-mode":"all","ha-sync-mode":"automatic"}}'
+
+  notify:
+    build:
+      context: ../../ms-andesstay-notify
+    container_name: andesstay-notify
+    restart: unless-stopped
+    environment:
+      # SerialGC y Xss bajos: la JVM tiene que convivir con los dos nodos del broker.
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70 -XX:+UseSerialGC -Xss512k"
+      RABBITMQ_HOST: rabbitmq1
+      RABBITMQ_PORT: 5672
+      RABBITMQ_VHOST: andesstay
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      # El .env usa RABBITMQ_PASSWORD y la aplicación lee RABBITMQ_PASS: el mapeo va aquí.
+      # Cambiar uno sin el otro deja la contraseña vacía y el broker responde ACCESS_REFUSED.
+      RABBITMQ_PASS: ${RABBITMQ_PASSWORD}
+      MAIL_HOST: ${MAIL_HOST:-smtp.gmail.com}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USER: ${MAIL_USER:-}
+      MAIL_PASS: ${MAIL_PASS:-}
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
+    networks:
+      - andesstay-mq
+    # No publica el 8085. GET /api/v1/notify/status existe para la evidencia, pero este
+    # servicio no tiene starter de security, así que su superficie HTTP solo debe ser
+    # alcanzable desde dentro de la instancia.
+    mem_limit: 320m
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-    command: >
-      sh -c "rabbitmq-server &
-             sleep 15 &&
-             rabbitmqctl stop_app &&
-             rabbitmqctl join_cluster rabbit@rabbitmq1 &&
-             rabbitmqctl start_app &&
-             tail -f /dev/null"
+      # Aquí el health indicator de RabbitMQ sí está habilitado: si notify no alcanza el
+      # broker, no sirve para nada y el contenedor debe quedar unhealthy.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8085/actuator/health | grep -q UP"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s

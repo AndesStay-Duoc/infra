@@ -86,7 +86,17 @@ services:
       CATALOG_BASE_URL: http://catalog:8082
       # Sin Kafka ni RabbitMQ desplegados, los publicadores de eventos quedan
       # desactivados. Ver ReservationEventPublisher y NotificationPublisher.
-      ANDESSTAY_EVENTS_ENABLED: "false"
+      #
+      # Hay una bandera POR BROKER, no una compartida: antes la única
+      # ANDESSTAY_EVENTS_ENABLED ataba los dos, así que activar las colas revivía
+      # el productor de Kafka contra un clúster inexistente y sumaba los 2 s de
+      # max.block.ms a cada escritura de reserva.
+      #
+      # La de RabbitMQ pasa a "true" recién cuando ec2-mq esté arriba y su 5672
+      # responda. Levantarla antes hace que convertAndSend, que es SÍNCRONO,
+      # lance AmqpConnectException y cada POST de reserva termine en 500.
+      ANDESSTAY_EVENTS_RABBIT_ENABLED: "false"
+      ANDESSTAY_EVENTS_KAFKA_ENABLED: "false"
       # Va de la mano con la línea anterior. Actuator registra un health
       # indicator de RabbitMQ en cuanto ve spring-boot-starter-amqp en el
       # classpath; sin broker lo marca DOWN y /actuator/health devuelve 503,
