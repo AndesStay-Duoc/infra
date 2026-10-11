@@ -1,109 +1,142 @@
-# Contrato — Roles, claims y autorización
+# Contrato — Roles y autorización
 
-Contrato canónico. Define cómo se traduce un token de cualquiera de los dos tenants a
-authorities de Spring, y qué rol puede llamar a qué endpoint.
+Contrato canónico de quién puede hacer qué. Cualquier cambio aquí obliga a actualizar el BFF, el
+microservicio afectado y la colección de pruebas en el mismo PR.
 
-## Los dos tenants
+> **Corrección del 2026-10-10.** Este documento describía **dos tenants** con los scopes
+> `access_as_staff` y `access_as_guest`, roles llamados `Recepcionista` y `Huesped`, authorities en
+> mayúsculas (`ROLE_ADMIN`) y endpoints `hold`/`release` colgando de `/api/catalog/units/{id}`.
+> Nada de eso es lo que hay. Describía el diseño que murió con la decisión D3 del 2026-09-14,
+> cuando no se pudo crear el segundo tenant. Los valores reales están abajo y se contrastaron
+> contra el código.
 
-El sistema usa **dos emisores de identidad**, porque el caso pide login corporativo y la rúbrica
-de la EP2 pide que los huéspedes se registren solos.
+## Identidad
 
-| | Tenant corporativo | Tenant de huéspedes |
-|---|---|---|
-| Producto | Microsoft Entra ID | Microsoft Entra External ID |
-| Quiénes | Admin, Recepcionista, Auditor | Huésped |
-| Alta de usuarios | El administrador los crea o invita | **Auto-registro desde el frontend** |
-| App registration | `AndesStay-Staff` | `AndesStay-Guest` |
-| Scope | `access_as_staff` | `access_as_guest` |
-| Audience | `api://<staff-client-id>` | `api://<guest-client-id>` |
-| Rutas del gateway | `/staff/*` | `/guest/*` |
+Un tenant, una app registration, un scope. El detalle está en
+[`../idaas/tenants.md`](../idaas/tenants.md), incluida la explicación de qué son hoy `staff` y
+`guest`: prefijos de ruta, no identidades distintas.
 
-Ambos usan **Authorization Code con PKCE**, con `state` y `nonce`.
-
-## Mapeo de claims a authorities
-
-El claim de roles es `roles`, un arreglo de strings. Cada valor se transforma anteponiendo
-`ROLE_` y pasando a mayúsculas.
-
-| Valor en el claim `roles` | Authority en Spring | Tenant |
-|---|---|---|
-| `Admin` | `ROLE_ADMIN` | corporativo |
-| `Recepcionista` | `ROLE_RECEPCIONISTA` | corporativo |
-| `Auditor` | `ROLE_AUDITOR` | corporativo |
-| `Huesped` | `ROLE_HUESPED` | huéspedes |
-
-El converter es común a todos los servicios y se copia como parte del paquete `common`. Un token
-sin claim `roles`, o con un valor no listado, queda **sin authorities**: autentica pero no
-autoriza nada, y toda llamada responde `403`.
-
-## Claims que se esperan en el token
-
-| Claim | Uso |
+| Dato | Valor |
 |---|---|
-| `iss` | Selecciona el decoder. Debe coincidir exactamente con uno de los dos issuers |
-| `aud` | **Se valida explícitamente.** Spring no lo hace por defecto |
-| `exp`, `nbf` | Vigencia |
-| `sub` | Identificador estable del usuario. Es el `guestId` de las reservas |
-| `roles` | Autorización |
-| `scp` o `scope` | Debe contener `access_as_staff` o `access_as_guest` según el tenant |
-| `name`, `email` | Presentación en el frontend y registro en auditoría |
+| Scope | `AndesStay.Access` |
+| Claim que lo trae | `scp` |
+| Claim de roles | `roles` |
 
-## Matriz endpoint × rol
+## Los cuatro roles
 
-| Endpoint | Admin | Recepcionista | Huésped | Auditor |
-|---|---|---|---|---|
-| `POST /api/reservations` | ✔ | ✔ | ✔ | — |
-| `GET /api/reservations` | ✔ todas | ✔ todas | ✔ solo propias | — |
-| `GET /api/reservations/{id}` | ✔ | ✔ | ✔ solo propias | — |
-| `PUT /api/reservations/{id}/status` | ✔ | ✔ | ✔ solo cancelar propias en `CREADA` | — |
-| `GET /api/catalog/units` | ✔ | ✔ | ✔ | — |
-| `POST /api/catalog/units` | ✔ | — | — | — |
-| `PUT /api/catalog/units/{id}` | ✔ | — | — | — |
-| `POST /api/catalog/units/{id}/hold` | interno | interno | — | — |
-| `POST /api/catalog/units/{id}/release` | interno | interno | — | — |
-| `GET /api/report/kpis` | ✔ | — | — | — |
-| `GET /api/report/top-units` | ✔ | — | — | — |
-| `GET /api/audit` | ✔ | — | — | ✔ |
-| `GET /api/audit/{reservationId}` | ✔ | — | — | ✔ |
+Los valores del claim son **exactamente** estos. No son los nombres para mostrar del portal, que sí
+están en castellano.
 
-"interno" significa que solo lo llama `ms-andesstay-reservations`, propagando el JWT del usuario
-que originó la operación, para no perder la trazabilidad en la auditoría.
+| Valor en el claim | Nombre para mostrar | Responsabilidad |
+|---|---|---|
+| `Admin` | Administrador | Administra el inventario y ve los KPIs |
+| `Operador` | Recepcionista | Confirma reservas, hace check-in y check-out |
+| `Cliente` | Huésped | Crea y sigue sus propias reservas |
+| `Auditor` | Auditor | Consulta el timeline. Solo lectura |
 
-## Autorización por propiedad del recurso
+## Authorities
 
-Las celdas que dicen "solo propias" no se resuelven con `@PreAuthorize` a secas: hay que
-comparar el `sub` del token contra el `guestId` de la reserva. Si no coincide, la respuesta es
-`403`, nunca `404` — no se filtra la existencia del recurso a alguien autenticado.
+El converter antepone `ROLE_` **conservando mayúsculas y minúsculas**: `ROLE_Admin`, no
+`ROLE_ADMIN`. Importa porque `hasRole('Admin')` compara literalmente.
+
+| Claim | Authority resultante |
+|---|---|
+| `roles: ["Admin"]` | `ROLE_Admin` |
+| `roles: ["Operador"]` | `ROLE_Operador` |
+| `roles: ["Auditor"]` | `ROLE_Auditor` |
+| `scp: "AndesStay.Access"` | `SCOPE_AndesStay.Access` |
+| *(sin `roles`)* + `acct: 1` + el scope | `ROLE_Cliente`, **derivado** |
+
+La derivación de `Cliente` está en `AzureRolesConverter`, presente en `ms-andesstay-bff`,
+`ms-andesstay-reservations` y `ms-andesstay-catalog`. `report` y `audit` usan un converter simple:
+no lo necesitan, porque el BFF no deja a un `Cliente` alcanzarlos.
+
+## Matriz de permisos
+
+Es la fuente de verdad. El BFF la aplica por ruta y método; cada microservicio la vuelve a aplicar
+con `@PreAuthorize`, que es defensa en profundidad y no redundancia: quien alcance el puerto del
+servicio sin pasar por el BFF se encuentra con la misma regla.
+
+| Método y ruta | Admin | Operador | Cliente | Auditor |
+|---|:---:|:---:|:---:|:---:|
+| `GET /api/me` | ✅ | ✅ | ✅ | ✅ |
+| `POST /api/reservations` | ✅ | ✅ | ✅ | ❌ |
+| `GET /api/reservations` | ✅ todas | ✅ todas | ✅ **solo las suyas** | ❌ |
+| `GET /api/reservations/{id}` | ✅ | ✅ | ✅ solo si es suya | ✅ |
+| `PUT /api/reservations/{id}/status` | ✅ | ✅ | ⚠️ **solo cancelar la suya en CREADA** | ❌ |
+| `GET /api/catalog/hostales` | ✅ | ✅ | ✅ | ❌ |
+| `GET /api/catalog/hostales/{id}/units` | ✅ | ✅ | ✅ | ❌ |
+| `POST /api/catalog/hostales` | ✅ | ❌ | ❌ | ❌ |
+| `PUT /api/catalog/hostales/{id}` | ✅ | ❌ | ❌ | ❌ |
+| `GET /api/catalog/units` | ✅ | ✅ | ✅ | ❌ |
+| `GET /api/catalog/units/{id}` | ✅ | ✅ | ✅ | ❌ |
+| `GET /api/catalog/units/{id}/availability` | ✅ | ✅ | ✅ | ❌ |
+| `POST /api/catalog/units` | ✅ | ❌ | ❌ | ❌ |
+| `PUT /api/catalog/units/{id}` | ✅ | ❌ | ❌ | ❌ |
+| `DELETE /api/catalog/units/{id}` | ✅ | ❌ | ❌ | ❌ |
+| `GET /api/report/**` | ✅ | ❌ | ❌ | ❌ |
+| `GET /api/audit/**` | ✅ | ❌ | ❌ | ✅ |
+| `/api/catalog/internal/**` | ❌ | ❌ | ❌ | ❌ |
+
+### Las tres filas que tienen truco
+
+**`PUT /{id}/status` para un `Cliente`.** Pasa el BFF y pasa `@PreAuthorize` si la reserva es
+suya, pero `ReservationService` le limita a **una** transición: `CANCELADA`, y solo desde `CREADA`.
+Cualquier otra, o una reserva ya confirmada, responde `403`. Es la transición 3 y la regla 5 del
+contrato, que hasta el 2026-10-10 el sistema prometía sin cumplir. Una vez confirmada hay cupo
+comprometido, así que a partir de ahí pasa por recepción.
+
+
+**`GET /api/reservations` para un `Cliente`.** Devuelve `200`, no la lista completa: el servicio
+filtra por el `sub` de su token. Quien decide es el rol, no un parámetro, así que un huésped no
+puede pedir las de otro. Hasta el 2026-10-10 este rol quedaba fuera y la pantalla de reservas se le
+abría en el frontend para terminar en `403`.
+
+**`/api/catalog/internal/**` para todos.** El BFF lo corta con `denyAll`, incluso a un `Admin`: no
+es una regla de rol, es una superficie que no se publica. Solo la llama
+`ms-andesstay-reservations` dentro de la red privada, y desde el 2026-10-10 **exige JWT válido**;
+antes estaba en `permitAll` y cualquiera que alcanzara el puerto 8082 podía mover los cupos sin
+token. `CatalogClient` propaga el token del llamante.
+
+## Endpoints internos, con su forma real
+
+| Método y ruta | Qué hace |
+|---|---|
+| `POST /api/catalog/internal/units/{id}/hold?from=&to=&holdId=` | Compromete un cupo por cada noche de `[from, to)`. Todo o nada, idempotente por `holdId` |
+| `POST /api/catalog/internal/holds/{holdId}/release` | Devuelve los cupos. Idempotente en los dos sentidos |
+
+Sustituyen al antiguo `PATCH /internal/units/{id}/slots?delta=±1`, que no sabía de fechas, no era
+idempotente y no era transaccional respecto del rango.
+
+## Reglas de propiedad
+
+1. Un `Cliente` solo ve y opera **sus** reservas. La comprobación la hace `ReservationSecurity`
+   comparando el `sub` del token con el `guestId`.
+2. Un `Cliente` solo puede cancelar, y únicamente mientras la reserva esté en `CREADA`.
+3. El `guestId` y el `guestEmail` de una reserva creada por un `Cliente` se **fuerzan** desde el
+   token, se mande lo que se mande en el cuerpo. Es lo que impide reservar a nombre de otro.
 
 ## Códigos de respuesta
-
-Esta tabla es la que se evalúa en la EP1, indicador 2, y en la EP2, indicador 7.
 
 | Situación | Código |
 |---|---|
 | Sin cabecera `Authorization` | `401` |
-| Token con issuer desconocido | `401` |
-| Firma inválida | `401` |
-| Token expirado | `401` |
-| **Audience incorrecta** | `401` |
-| Scope faltante | `403` |
-| Token válido, rol sin permiso | `403` |
-| Token válido, rol correcto, recurso ajeno | `403` |
-| Token válido y autorizado | `200` |
+| Token expirado, con firma inválida, o con `iss` o `aud` equivocados | `401` |
+| Token válido sin el rol de la ruta | `403` |
+| Token válido sin `roles` ni el scope de la API | `403` |
+| Rol correcto | `200`, `201` o `204` |
 
-El cuerpo de error es siempre JSON y no revela detalles internos:
+La diferencia entre `401` y `403` no es cosmética: `401` significa «no sé quién eres» y `403` «sé
+quién eres y no te alcanza». Los cuerpos de error del dominio están en
+[`estados.md`](estados.md).
 
-```json
-{ "error": "TOKEN_INVALIDO", "timestamp": "2026-09-09T14:30:00Z", "traceId": "..." }
+## Verificación
+
+La batería completa, 53 peticiones con aserción de código y de cuerpo, está en
+[`../evidencias/autorizacion/coleccion-postman.json`](../evidencias/autorizacion/coleccion-postman.json).
+
+```bash
+newman run coleccion-postman.json -e entorno-postman.json --reporters cli,html
 ```
 
-## Dónde se valida qué
-
-| Capa | Valida |
-|---|---|
-| API Gateway | `iss`, `aud`, firma y vigencia, por ruta y con el authorizer correspondiente |
-| BFF | Lo mismo, más el rol y la pertenencia del recurso |
-| Servicio de dominio | Lo mismo que el BFF. **No se confía en que el BFF ya validó** |
-
-La validación se repite en cada capa a propósito: un servicio de dominio nunca debe quedar
-expuesto si alguien alcanza su puerto directamente.
+Por cada ruta se prueban tres casos: rol correcto, sin token y rol insuficiente.

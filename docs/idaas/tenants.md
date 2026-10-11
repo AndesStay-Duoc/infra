@@ -72,10 +72,40 @@ audiencia del token.
 forma automática al autoregistrarse, y asignarlos requeriría automatización con
 Microsoft Graph. La derivación en el BFF es la decisión D2.
 
-**La derivación solo está en `ms-andesstay-bff` y `ms-andesstay-reservations`.**
-`catalog`, `report` y `audit` usan un converter simple que no la aplica. Hoy no
-rompe nada porque el BFF solo permite a un `Cliente` alcanzar
-`/api/reservations/**`.
+**La derivación está en `ms-andesstay-bff`, `ms-andesstay-reservations` y, desde
+el 2026-10-10, también en `ms-andesstay-catalog`.** Se copió al abrir el catálogo
+al rol `Cliente`: con el converter simple que tenía antes, un huésped llegaba
+autenticado pero sin ninguna authority y el propio servicio le respondía `403`.
+
+`report` y `audit` siguen con el converter simple. No rompe nada porque el BFF no
+deja a un `Cliente` alcanzarlos, y abrirlos no tendría sentido: un huésped no
+consulta KPIs ni el timeline de auditoría.
+
+## Qué son hoy `staff` y `guest`
+
+Conviene decirlo sin rodeos, porque la documentación antigua sugiere otra cosa:
+**la separación entre personal y huésped NO existe en la identidad.** Nunca
+llegó a implementarse.
+
+| Capa | Hay separación | Cómo |
+|---|---|---|
+| Tenant | No | Uno solo |
+| App registration | No | Una sola |
+| Scope | No | Uno solo, `AndesStay.Access` |
+| Authorizer del gateway | No | Uno solo, `entra-andesstay` |
+| Rutas del gateway | **Sí** | Prefijos `/staff/*` y `/guest/*`, 11 y 5 rutas |
+| nginx | **Sí** | Reescribe `^/(staff\|guest)/(.*)$` hacia `/api/$2` |
+| BFF | **Sí** | Decide por **rol**, no por audiencia ni por scope |
+
+Es decir: los prefijos son contrato público y legibilidad en la consola del
+gateway, pero quien de verdad diferencia es el BFF mirando el rol. Un `Cliente`
+que llame a `/staff/report/kpis` recibe `403`, no `401`: el authorizer lo deja
+pasar porque su token es válido, y lo frena el BFF.
+
+El diseño original sí separaba por identidad —dos tenants, dos audiencias— y
+murió con la decisión D3 del 2026-09-14, cuando no se pudo crear el segundo
+tenant. Los documentos que todavía hablan de `access_as_staff`, `access_as_guest`
+o de dos authorizers describen ese diseño abandonado, no el sistema.
 
 ## Auto-registro de huéspedes
 

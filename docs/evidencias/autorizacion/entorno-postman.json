@@ -1,0 +1,79 @@
+{
+  "id": "6c2f9a14-3e87-4d05-b1c9-7a4e2d8f0c63",
+  "name": "AndesStay · local",
+  "values": [
+    {
+      "key": "bffUrl",
+      "value": "http://localhost:8080",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "catalogUrl",
+      "value": "http://localhost:8082",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "gatewayUrl",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "nginxUrl",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "webOrigin",
+      "value": "http://localhost:4200",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "gatewaySecret",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "tokenAdmin",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "tokenOperador",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "tokenCliente",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "tokenAuditor",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "tokenSinRol",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "reservaSinCupoId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    }
+  ],
+  "_postman_variable_scope": "environment"
+}
