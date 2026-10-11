@@ -1,0 +1,2155 @@
+{
+  "info": {
+    "_postman_id": "a9d3c1e0-7b42-4f58-9c10-2f6a8d4e5b31",
+    "name": "AndesStay · Evidencia de códigos de respuesta",
+    "description": "Batería completa de pruebas por ruta y por rol, con asercion del código HTTP y del cuerpo de error.\n\nCubre 200, 201, 204, 400, 401, 403, 404 y 409.\n\n## Antes de ejecutar\n\n1. Importar también `entorno-postman.json` y seleccionarlo.\n2. Rellenar los cinco tokens. Se obtienen iniciando sesión en la SPA con cada usuario y copiando el access token desde las herramientas de desarrollo: pestaña Aplicación, Almacenamiento local, clave que contiene `accesstoken`, campo `secret`. Duran una hora.\n3. `tokenSinRol` es el de un usuario autoregistrado al que NO se le asignó ningún App Role.\n\n## Cómo se ejecuta\n\nCon el Runner de Postman sobre la colección completa, o por consola:\n\n    newman run coleccion-postman.json -e entorno-postman.json --reporters cli,html\n\nEl orden importa: la carpeta 4 crea la reserva que usan la 5 y la 6.\n\n## Qué NO cubre\n\nLas carpetas 8 y 9 solo tienen sentido contra el despliegue en AWS. En local fallan a propósito, porque no hay gateway ni nginx.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Fechas siempre futuras, para que la colección se pueda correr cualquier día sin editarla.",
+          "// Se usa un desplazamiento distinto en cada ejecución para no chocar con reservas anteriores.",
+          "if (!pm.collectionVariables.get('fechaEntrada')) {",
+          "  const offset = 30 + Math.floor(Math.random() * 300);",
+          "  const entrada = new Date(Date.now() + offset * 86400000);",
+          "  const salida = new Date(entrada.getTime() + 3 * 86400000);",
+          "  const iso = d => d.toISOString().slice(0, 10);",
+          "  pm.collectionVariables.set('fechaEntrada', iso(entrada));",
+          "  pm.collectionVariables.set('fechaSalida', iso(salida));",
+          "}"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Comprobación transversal: ninguna respuesta debería tardar más de 5 s.",
+          "pm.test('Responde en menos de 5 s', () => pm.expect(pm.response.responseTime).to.be.below(5000));"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "fechaEntrada",
+      "value": ""
+    },
+    {
+      "key": "fechaSalida",
+      "value": ""
+    },
+    {
+      "key": "unitId",
+      "value": "1"
+    },
+    {
+      "key": "unidadCreadaId",
+      "value": ""
+    },
+    {
+      "key": "reservaId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "0 · Salud (sin autenticación)",
+      "item": [
+        {
+          "name": "200 · GET /actuator/health del BFF",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{bffUrl}}/actuator/health",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
+            },
+            "description": "El health check es público a propósito: lo usa el healthcheck del contenedor, que no tiene token."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('status UP', () => pm.expect(pm.response.json().status).to.eql('UP'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1 · Sin token → 401 en todas las rutas",
+      "description": "El 401 lo emite el BFF antes de mirar el rol. La diferencia con el 403 importa: 401 es 'no sé quién eres', 403 es 'sé quién eres y no te alcanza'.",
+      "item": [
+        {
+          "name": "401 · GET /api/me",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{bffUrl}}/api/me",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "me"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));",
+                  "pm.test('Trae WWW-Authenticate, como exige RFC 6750', () => pm.response.to.have.header('WWW-Authenticate'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 · GET /api/reservations",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 · POST /api/reservations",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"unitId\":1,\"checkIn\":\"{{fechaEntrada}}\",\"checkOut\":\"{{fechaSalida}}\",\"huespedes\":2,\"guestId\":\"x\",\"guestEmail\":\"x@example.cl\"}"
+            },
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 · GET /api/catalog/units",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{bffUrl}}/api/catalog/units",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "catalog",
+                "units"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 · GET /api/report/kpis",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{bffUrl}}/api/report/kpis",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "report",
+                "kpis"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 · GET /api/audit/events",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{bffUrl}}/api/audit/events",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "audit",
+                "events"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 · Token manipulado (firma inválida)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmYWxzbyIsInJvbGVzIjpbIkFkbWluIl19.firma-inventada"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/me",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "me"
+              ]
+            },
+            "description": "Un token con el rol Admin en el payload pero sin firma válida. Demuestra que la validación es criptográfica y no de contenido."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));",
+                  "pm.test('Dice invalid_token', () => pm.expect(pm.response.headers.get('WWW-Authenticate')).to.include('invalid_token'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 · Identidad",
+      "item": [
+        {
+          "name": "200 · GET /api/me como Admin",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/me",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "me"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('Trae effectiveRoles', () => pm.expect(b.effectiveRoles).to.be.an('array').that.is.not.empty);",
+                  "pm.test('El rol es Admin', () => pm.expect(b.effectiveRoles).to.include('Admin'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · GET /api/me como Cliente",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenCliente}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/me",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "me"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('El rol es Cliente', () => pm.expect(pm.response.json().effectiveRoles).to.include('Cliente'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 · GET /api/me con token sin rol ni scope",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenSinRol}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/me",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "me"
+              ]
+            },
+            "description": "Token válido pero sin App Role ni el scope de la API. Autenticado y aun así rechazado: por eso es 403 y no 401."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));",
+                  "pm.test('No es 401: el token es válido', () => pm.expect(pm.response.code).to.not.eql(401));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 · Catálogo",
+      "item": [
+        {
+          "name": "200 · GET units como Admin",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/catalog/units",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "catalog",
+                "units"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('Devuelve una lista', () => pm.expect(pm.response.json()).to.be.an('array'));",
+                  "const u = pm.response.json().find(x => x.active);",
+                  "if (u) pm.collectionVariables.set('unitId', u.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · GET units como Cliente",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenCliente}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/catalog/units",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "catalog",
+                "units"
+              ]
+            },
+            "description": "El huésped necesita ver el catálogo para elegir qué reservar. Antes devolvía 403 y la pantalla se le abría para nada."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 · GET units como Auditor",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAuditor}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/catalog/units",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "catalog",
+                "units"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · GET units filtrando por fechas y huéspedes",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/catalog/units?from={{fechaEntrada}}&to={{fechaSalida}}&huespedes=2",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "catalog",
+                "units"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "{{fechaEntrada}}"
+                },
+                {
+                  "key": "to",
+                  "value": "{{fechaSalida}}"
+                },
+                {
+                  "key": "huespedes",
+                  "value": "2"
+                }
+              ]
+            },
+            "description": "Devuelve solo las unidades libres TODAS las noches del rango y con capacidad suficiente."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('Todas admiten al menos 2 huéspedes', () => pm.response.json().forEach(u => pm.expect(u.capacity).to.be.at.least(2)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 · GET units con solo una de las dos fechas",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/catalog/units?from={{fechaEntrada}}",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "catalog",
+                "units"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "{{fechaEntrada}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('Cuerpo con error', () => pm.expect(pm.response.json().error).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "201 · POST unit como Admin",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Cabana de prueba Postman\",\n  \"type\": \"CABANA\",\n  \"capacity\": 4,\n  \"pricePerNight\": 50000,\n  \"availableSlots\": 2,\n  \"description\": \"Creada por la bateria de evidencia\",\n  \"active\": true\n}"
+            },
+            "url": {
+              "raw": "{{bffUrl}}/api/catalog/units",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "catalog",
+                "units"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "pm.test('Devuelve el id asignado', () => pm.expect(pm.response.json().id).to.be.a('number'));",
+                  "pm.collectionVariables.set('unidadCreadaId', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 · POST unit como Operador",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenOperador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"No deberia crearse\",\"type\":\"CABANA\",\"capacity\":2,\"pricePerNight\":1000,\"availableSlots\":1,\"active\":true}"
+            },
+            "url": {
+              "raw": "{{bffUrl}}/api/catalog/units",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "catalog",
+                "units"
+              ]
+            },
+            "description": "Crear unidades es solo de Admin. El Operador confirma reservas, no administra inventario."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 · POST unit con cuerpo inválido",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"CABANA\",\n  \"capacity\": 4\n}"
+            },
+            "description": "Faltan name, pricePerNight y availableSlots, que son obligatorios."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · GET unit por id",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/catalog/units/{{unidadCreadaId}}",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "catalog",
+                "units",
+                "{{unidadCreadaId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "404 · GET unit inexistente",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/catalog/units/999999",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "catalog",
+                "units",
+                "999999"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));",
+                  "pm.test('No es 500: el manejador lo traduce', () => pm.expect(pm.response.code).to.not.eql(500));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · GET availability de la unidad",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/catalog/units/{{unitId}}/availability?from={{fechaEntrada}}&to={{fechaSalida}}",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "catalog",
+                "units",
+                "{{unitId}}",
+                "availability"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "{{fechaEntrada}}"
+                },
+                {
+                  "key": "to",
+                  "value": "{{fechaSalida}}"
+                }
+              ]
+            },
+            "description": "Calendario noche a noche. El día de salida no aparece: no se ocupa."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('Tres noches para un rango de tres días', () => pm.expect(pm.response.json().length).to.eql(3));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "204 · DELETE unit como Admin",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/catalog/units/{{unidadCreadaId}}",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "catalog",
+                "units",
+                "{{unidadCreadaId}}"
+              ]
+            },
+            "description": "Borrado lógico: la unidad queda con active=false, no se elimina la fila."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204', () => pm.response.to.have.status(204));",
+                  "pm.test('Sin cuerpo', () => pm.expect(pm.response.text()).to.be.empty);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4 · Reservas · ruta feliz",
+      "description": "Crea la reserva que usan las carpetas 5 y 6. El orden dentro de esta carpeta importa.",
+      "item": [
+        {
+          "name": "201 · POST reserva como Cliente",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenCliente}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"unitId\": {{unitId}},\n  \"checkIn\": \"{{fechaEntrada}}\",\n  \"checkOut\": \"{{fechaSalida}}\",\n  \"huespedes\": 2\n}"
+            },
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            },
+            "description": "El guestId y el guestEmail NO se envían: el servicio los fuerza desde el token para que un huésped no pueda reservar a nombre de otro."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('Nace en CREADA', () => pm.expect(b.status).to.eql('CREADA'));",
+                  "pm.test('Calcula el total', () => pm.expect(b.totalPrice).to.not.be.null);",
+                  "pm.test('Asigna correlationId', () => pm.expect(b.correlationId).to.be.a('string'));",
+                  "pm.collectionVariables.set('reservaId', b.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · GET reservas como Cliente (solo las suyas)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenCliente}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            },
+            "description": "El filtro por dueño lo aplica el servicio a partir del sub del token, no de un parámetro: un huésped no puede pedir las de otro."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('Devuelve una lista', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · GET reservas como Admin",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 · GET reservas como Auditor",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAuditor}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · GET reserva por id como Admin",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "{{reservaId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "404 · GET reserva inexistente",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations/999999",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "999999"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));",
+                  "pm.test('error RESERVA_NO_ENCONTRADA', () => pm.expect(pm.response.json().error).to.eql('RESERVA_NO_ENCONTRADA'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · PUT status → CONFIRMADA",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenOperador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\":\"CONFIRMADA\"}"
+            },
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}/status",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "{{reservaId}}",
+                "status"
+              ]
+            },
+            "description": "Compromete el cupo en catalog y publica email.send y voucher.gen en RabbitMQ."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('Queda CONFIRMADA', () => pm.expect(pm.response.json().status).to.eql('CONFIRMADA'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · PUT status → CHECKIN_PENDIENTE",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenOperador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\":\"CHECKIN_PENDIENTE\"}"
+            },
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}/status",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "{{reservaId}}",
+                "status"
+              ]
+            },
+            "description": "Publica housekeeping.ticket con tipoTarea PREPARACION."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('Queda CHECKIN_PENDIENTE', () => pm.expect(pm.response.json().status).to.eql('CHECKIN_PENDIENTE'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · PUT status → EN_ESTADIA",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenOperador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\":\"EN_ESTADIA\"}"
+            },
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}/status",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "{{reservaId}}",
+                "status"
+              ]
+            },
+            "description": "Sin tilde. El deserializador acepta igualmente EN_ESTADÍA, pero la respuesta siempre viene sin tilde."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('Responde sin tilde', () => pm.expect(pm.response.json().status).to.eql('EN_ESTADIA'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · PUT status → CHECKOUT",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenOperador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\":\"CHECKOUT\"}"
+            },
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}/status",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "{{reservaId}}",
+                "status"
+              ]
+            },
+            "description": "Libera el cupo y publica housekeeping.ticket con tipoTarea LIMPIEZA."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('Queda CHECKOUT', () => pm.expect(pm.response.json().status).to.eql('CHECKOUT'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "409 · PUT status desde CHECKOUT (estado terminal)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenOperador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\":\"CONFIRMADA\"}"
+            },
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}/status",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "{{reservaId}}",
+                "status"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409', () => pm.response.to.have.status(409));",
+                  "const b = pm.response.json();",
+                  "pm.test('error TRANSICION_INVALIDA', () => pm.expect(b.error).to.eql('TRANSICION_INVALIDA'));",
+                  "pm.test('Informa desde y hacia', () => { pm.expect(b.desde).to.eql('CHECKOUT'); pm.expect(b.hacia).to.eql('CONFIRMADA'); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5 · Reglas de negocio",
+      "item": [
+        {
+          "name": "400 · Reserva con más huéspedes que la capacidad",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenOperador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"unitId\": {{unitId}},\n  \"checkIn\": \"{{fechaEntrada}}\",\n  \"checkOut\": \"{{fechaSalida}}\",\n  \"huespedes\": 99,\n  \"guestId\": \"prueba-postman\",\n  \"guestEmail\": \"prueba@example.cl\"\n}"
+            },
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 · Reserva con la salida antes de la entrada",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenOperador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"unitId\": {{unitId}},\n  \"checkIn\": \"{{fechaSalida}}\",\n  \"checkOut\": \"{{fechaEntrada}}\",\n  \"huespedes\": 1,\n  \"guestId\": \"prueba-postman\",\n  \"guestEmail\": \"prueba@example.cl\"\n}"
+            },
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 · Estado inexistente en el cuerpo",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenOperador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\":\"ESTADO_QUE_NO_EXISTE\"}"
+            },
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}/status",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "{{reservaId}}",
+                "status"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('error ESTADO_INVALIDO', () => pm.expect(pm.response.json().error).to.eql('ESTADO_INVALIDO'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 · Cliente cambiando el estado de una reserva",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenCliente}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\":\"CONFIRMADA\"}"
+            },
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}/status",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "{{reservaId}}",
+                "status"
+              ]
+            },
+            "description": "Confirmar es de recepción. El huésped crea y sigue, no confirma."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "409 · Confirmar sin cupo → SIN_DISPONIBILIDAD",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenOperador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\":\"CONFIRMADA\"}"
+            },
+            "url": {
+              "raw": "{{bffUrl}}/api/reservations/{{reservaSinCupoId}}/status",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "reservations",
+                "{{reservaSinCupoId}}",
+                "status"
+              ]
+            },
+            "description": "PREPARACIÓN MANUAL: hay que dejar una unidad sin cupo para el rango y crear una reserva sobre ella, guardando su id en reservaSinCupoId. Es la regla que resuelve el overbooking, así que conviene evidenciarla aunque exija ese paso previo.\n\nSe comprueba además que la reserva SIGUE en CREADA."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.variables.get('reservaSinCupoId')) { pm.test.skip('Falta reservaSinCupoId: ver la descripción'); } else {",
+                  "  pm.test('409', () => pm.response.to.have.status(409));",
+                  "  pm.test('error SIN_DISPONIBILIDAD', () => pm.expect(pm.response.json().error).to.eql('SIN_DISPONIBILIDAD'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6 · Reportería y auditoría",
+      "item": [
+        {
+          "name": "200 · GET kpis como Admin",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/report/kpis?range=last24h",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "report",
+                "kpis"
+              ],
+              "query": [
+                {
+                  "key": "range",
+                  "value": "last24h"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 · GET kpis como Operador",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenOperador}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/report/kpis?range=last24h",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "report",
+                "kpis"
+              ],
+              "query": [
+                {
+                  "key": "range",
+                  "value": "last24h"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · GET audit events como Auditor",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAuditor}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/audit/events?from={{fechaEntrada}}&to={{fechaSalida}}",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "audit",
+                "events"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "{{fechaEntrada}}"
+                },
+                {
+                  "key": "to",
+                  "value": "{{fechaSalida}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 · GET audit events como Operador",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenOperador}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/audit/events?from={{fechaEntrada}}&to={{fechaSalida}}",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "audit",
+                "events"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "{{fechaEntrada}}"
+                },
+                {
+                  "key": "to",
+                  "value": "{{fechaSalida}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7 · Endpoints internos blindados",
+      "description": "Van DIRECTOS al puerto de catalog, saltándose el BFF. Antes estaban en permitAll, así que cualquiera que alcanzara el 8082 podía mover los cupos sin token.",
+      "item": [
+        {
+          "name": "401 · POST hold sin token, directo a catalog",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{catalogUrl}}/api/catalog/internal/units/1/hold?from={{fechaEntrada}}&to={{fechaSalida}}&holdId=intruso",
+              "host": [
+                "{{catalogUrl}}"
+              ],
+              "path": [
+                "api",
+                "catalog",
+                "internal",
+                "units",
+                "1",
+                "hold"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "{{fechaEntrada}}"
+                },
+                {
+                  "key": "to",
+                  "value": "{{fechaSalida}}"
+                },
+                {
+                  "key": "holdId",
+                  "value": "intruso"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 · Los internos tampoco se alcanzan por el BFF",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/catalog/internal/units/1/hold?from={{fechaEntrada}}&to={{fechaSalida}}&holdId=porelbff",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "catalog",
+                "internal",
+                "units",
+                "1",
+                "hold"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "{{fechaEntrada}}"
+                },
+                {
+                  "key": "to",
+                  "value": "{{fechaSalida}}"
+                },
+                {
+                  "key": "holdId",
+                  "value": "porelbff"
+                }
+              ]
+            },
+            "description": "Ni siquiera un Admin: el BFF los corta con denyAll. Defensa en profundidad, no redundancia."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Sin token el BFF corta con 401 ANTES de mirar la ruta, asi que el denyAll solo se",
+                  "// puede evidenciar con un token valido. Con el de Admin, que es el rol mas alto, un 403",
+                  "// demuestra que la regla es de ruta y no de rol.",
+                  "if (!pm.variables.get('tokenAdmin')) {",
+                  "  pm.test('401 sin token (falta tokenAdmin para evidenciar el denyAll)', () => pm.response.to.have.status(401));",
+                  "} else {",
+                  "  pm.test('403 incluso siendo Admin', () => pm.response.to.have.status(403));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "8 · API Gateway (solo contra AWS)",
+      "description": "Requiere gatewayUrl. En local estas pruebas fallan a propósito, porque no hay gateway.",
+      "item": [
+        {
+          "name": "401 · GET /staff/reservations sin token",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/staff/reservations",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "staff",
+                "reservations"
+              ]
+            },
+            "description": "El 401 lo emite el authorizer JWT del gateway, antes de que la petición salga hacia la instancia."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · GET /staff/reservations como Admin",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/staff/reservations",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "staff",
+                "reservations"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 · GET /staff/report/kpis como Cliente",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenCliente}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/staff/report/kpis",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "staff",
+                "report",
+                "kpis"
+              ]
+            },
+            "description": "Pasa el authorizer, porque el token es válido, y lo rechaza el BFF por rol. 403, no 401: la diferenciación real la hace el BFF."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "404 · Ruta no declarada en el gateway",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/staff/ruta-que-no-existe",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "staff",
+                "ruta-que-no-existe"
+              ]
+            },
+            "description": "No hay ruta $default sin proteger: lo que no está declarado da 404."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "204 · OPTIONS de preflight desde el origen permitido",
+          "request": {
+            "method": "OPTIONS",
+            "header": [
+              {
+                "key": "Origin",
+                "value": "{{webOrigin}}"
+              },
+              {
+                "key": "Access-Control-Request-Method",
+                "value": "GET"
+              },
+              {
+                "key": "Access-Control-Request-Headers",
+                "value": "authorization"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/me",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "me"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204', () => pm.response.to.have.status(204));",
+                  "pm.test('Origen exacto, sin comodín', () => pm.expect(pm.response.headers.get('Access-Control-Allow-Origin')).to.not.eql('*'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sin cabecera CORS · OPTIONS desde un origen no listado",
+          "request": {
+            "method": "OPTIONS",
+            "header": [
+              {
+                "key": "Origin",
+                "value": "https://sitio-no-autorizado.example"
+              },
+              {
+                "key": "Access-Control-Request-Method",
+                "value": "GET"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/me",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "me"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('No devuelve Access-Control-Allow-Origin', () => pm.expect(pm.response.headers.get('Access-Control-Allow-Origin')).to.be.undefined);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "9 · Saltarse el gateway (solo contra AWS)",
+      "item": [
+        {
+          "name": "403 · Directo al puerto 80 sin X-Gateway-Secret",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{nginxUrl}}/api/me",
+              "host": [
+                "{{nginxUrl}}"
+              ],
+              "path": [
+                "api",
+                "me"
+              ]
+            },
+            "description": "El puerto 80 tiene que estar abierto a internet, porque las integraciones del gateway salen desde IPs de AWS que no se pueden acotar. Lo que impide alcanzar el BFF saltándose el gateway es esta cabecera compartida."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));",
+                  "pm.test('Es nginx quien corta, no el BFF', () => pm.expect(pm.response.text()).to.include('nginx'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · Directo al puerto 80 CON X-Gateway-Secret",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "X-Gateway-Secret",
+                "value": "{{gatewaySecret}}"
+              }
+            ],
+            "url": {
+              "raw": "{{nginxUrl}}/api/me",
+              "host": [
+                "{{nginxUrl}}"
+              ],
+              "path": [
+                "api",
+                "me"
+              ]
+            },
+            "description": "El contraste de la prueba anterior: con la cabecera correcta sí pasa."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
