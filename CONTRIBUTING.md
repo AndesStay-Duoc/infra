@@ -1,6 +1,6 @@
 # Guía de contribución — AndesStay
 
-Este documento es común a los 8 repositorios de la organización
+Este documento es común a los 9 repositorios de la organización
 [AndesStay-Duoc](https://github.com/AndesStay-Duoc).
 
 ## Ramas
@@ -9,15 +9,15 @@ Este documento es común a los 8 repositorios de la organización
 |---|---|
 | `main` | Solo el README. **Protegida: no se toca.** |
 | `develop` | Rama de integración y despliegues. Es la rama por defecto. |
-| `feature/<servicio>-<descripcion>` | Trabajo nuevo. Sale de `develop`. |
+| `feat/<servicio>-<descripcion>` | Trabajo nuevo. Sale de `develop`. |
 | `fix/<servicio>-<descripcion>` | Corrección de un defecto. Sale de `develop`. |
 
-Ejemplos: `feature/reservations-maquina-estados`, `fix/notify-ack-duplicado`.
+Ejemplos: `feat/reservations-maquina-estados`, `fix/notify-ack-duplicado`.
 
 ```bash
 git checkout develop
 git pull
-git checkout -b feature/bff-validar-audience
+git checkout -b feat/bff-validar-audience
 ```
 
 ## Commits
@@ -41,7 +41,7 @@ imperativo:
 | `build` | Sistema de construcción o dependencias de empaquetado |
 
 El `scope` es el servicio o módulo afectado: `reservations`, `catalog`, `bff`, `frontend`,
-`notify`, `audit`, `report`, `infra`.
+`notify`, `mq`, `audit`, `report`, `infra`.
 
 Ejemplos:
 
@@ -56,7 +56,7 @@ contexto, va en el cuerpo tras una línea en blanco.
 
 ## Pull Requests
 
-- Siempre desde `feature/*` o `fix/*` hacia **`develop`**. Nunca hacia `main`.
+- Siempre desde `feat/*` o `fix/*` hacia **`develop`**. Nunca hacia `main`.
 - **Mínimo un revisor.** El PR se mergea con **squash**, para mantener el historial legible.
 - La descripción usa la plantilla del repositorio e indica qué casilla del `CHECKLIST.md` cierra.
 - Antes de pedir revisión: el proyecto compila y los tests pasan localmente.
@@ -76,9 +76,9 @@ llega a subirse, hay que rotarlo: borrar el commit no basta.
 
 ## Convenciones de código
 
-- **Java 21 / Spring Boot 3.5.** Paquetes en `cl.andesstay.<servicio>`, con separación
+- **Java 17 / Spring Boot 3.2.5.** Paquetes en `cl.andesstay.<servicio>`, con separación
   `domain` / `application` / `infrastructure`.
-- **Angular 20.** Estructura `core/` (auth, interceptors, guards), `features/`, `shared/`.
+- **Angular 17.** Estructura `core/` (auth, interceptors, guards), `features/`, `shared/`.
 - Los contratos de API, eventos y rutas del gateway son canónicos y viven en el repositorio
   `infra`, bajo `docs/contracts/`. Si un cambio los afecta, se actualizan **en el mismo PR**.
 
@@ -117,15 +117,18 @@ esta tabla y el `.env.example` del servicio en el mismo PR.
 | `ms-andesstay-bff` | 8080 |
 | `ms-andesstay-reservations` | 8081 |
 | `ms-andesstay-catalog` | 8082 |
+| `ms-andesstay-report` | 8083 |
 | `ms-andesstay-audit` | 8084 |
-| `ms-andesstay-report` | 8085 |
-| `ms-andesstay-notify` | sin puerto HTTP: es consumidor de RabbitMQ |
+| `ms-andesstay-notify` | 8085, no publicado: `/api/v1/notify/status` es solo para evidencia |
+| `ms-andesstay-mq` | 8086, publicado solo en loopback y alcanzable por túnel SSH |
 | `frontend-andesstay` | 4200 |
+
+Los dos últimos corren en la instancia `ec2-mq`, junto al broker, y no en `ec2-apps`.
 
 ### Orden de arranque
 
 La infraestructura va primero, desde el repositorio `infra`. Los servicios de dominio fallan al
-iniciar si Oracle o la mensajería no están disponibles.
+iniciar si MySQL o la mensajería no están disponibles.
 
 ```bash
 docker compose -f oracle/compose.yml up -d    # base de datos
