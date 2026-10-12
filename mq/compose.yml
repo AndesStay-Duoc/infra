@@ -174,6 +174,9 @@ services:
       MAIL_PORT: ${MAIL_PORT:-587}
       MAIL_USER: ${MAIL_USER:-}
       MAIL_PASS: ${MAIL_PASS:-}
+      # Validan el JWT de /api/v1/notify/status y /actuator/metrics, que exigen el rol Admin.
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-055d11d1-8ae0-4221-a6f7-b50be0a623b4}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-704a544f-3d92-44f5-aef9-8559574cff34}
     depends_on:
       rabbitmq1:
         condition: service_healthy
@@ -181,9 +184,9 @@ services:
         condition: service_completed_successfully
     networks:
       - andesstay-mq
-    # No publica el 8085. GET /api/v1/notify/status existe para la evidencia, pero este
-    # servicio no tiene starter de security, así que su superficie HTTP solo debe ser
-    # alcanzable desde dentro de la instancia.
+    # No publica el 8085. GET /api/v1/notify/status y /actuator/metrics existen para la evidencia y
+    # exigen un JWT con el rol Admin; aun así, su superficie HTTP solo debe ser alcanzable desde
+    # dentro de la instancia. /actuator/health queda abierto para el healthcheck de abajo.
     mem_limit: 320m
     healthcheck:
       # Aquí el health indicator de RabbitMQ sí está habilitado: si notify no alcanza el

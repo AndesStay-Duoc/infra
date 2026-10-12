@@ -545,17 +545,26 @@ q.cmd.housekeeping publicados=1 entregados=1  ack=1
 publicación.
 
 **En las métricas de notify** (su puerto no se publica, así que se consulta desde dentro del
-contenedor):
+contenedor). `/actuator/metrics` **exige un token con el rol Admin**, el mismo `$TOKEN` del paso 3:
 
 ```bash
-docker exec andesstay-notify wget -qO- http://127.0.0.1:8085/actuator/metrics/notify.messages.dlq
+docker exec andesstay-notify wget -qO- --header "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8085/actuator/metrics/notify.messages.dlq
 ```
 
 ```json
 {"name":"notify.messages.dlq","description":"Mensajes que llegaron a una DLQ","measurements":[{"statistic":"COUNT","value":2.0}],"availableTags":[{"tag":"queue","values":["q.cmd.email.dlq"]}]}
 ```
 
-La métrica responde `404` hasta que llega el primer mensaje a una DLQ.
+Sin token responde `401` y con otro rol `403`. La métrica responde `404` hasta que llega el primer
+mensaje a una DLQ.
+
+> **Estado de este comando.** La respuesta de arriba se obtuvo el 2026-10-11, **antes** de que
+> notify protegiera `/actuator/metrics` (rama `feat/notify-seguridad-jwt` de
+> `ms-andesstay-notify`). La exigencia del rol Admin está cubierta por los tests de capa web de
+> notify (`SeguridadWebTest`: 401, 403 y 200), pero **el comando con `--header` no se repitió en el
+> entorno Docker**. Si se prueba con una versión de notify anterior a esa rama, la métrica responde
+> sin token.
 
 ---
 
@@ -598,5 +607,5 @@ mantienen lo de la prueba anterior.
 | 5. Reservations publica y notify consume | 🔑 Verificado con token local — **falta con token real** |
 | 6.1 DLQ por error permanente | ✅ Verificado (no requiere token); el formulario de la consola no se probó visualmente |
 | 6.2 DLQ por error transitorio | 🔑 Verificado con token local — **falta con token real** |
-| 6.3 Ver la DLQ en logs, consola y métricas | ✅ Verificado |
+| 6.3 Ver la DLQ en logs, consola y métricas | ✅ Verificado logs y consola. La métrica con token: ⚠️ no repetida en Docker tras proteger `/actuator/metrics` (cubierta por tests) |
 | 7. Apagar | ✅ Verificado |
