@@ -20,7 +20,7 @@ tags:
   - name: reservas
 
 paths:
-  /api/reservations:
+  /api/v1/reservations:
     post:
       tags: [reservas]
       summary: Crear una reserva
@@ -78,7 +78,7 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/RolInsuficiente' }
 
-  /api/reservations/{id}:
+  /api/v1/reservations/{id}:
     parameters:
       - name: id
         in: path
@@ -102,7 +102,7 @@ paths:
         '403': { $ref: '#/components/responses/RolInsuficiente' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
 
-  /api/reservations/{id}/status:
+  /api/v1/reservations/{id}/status:
     parameters:
       - name: id
         in: path

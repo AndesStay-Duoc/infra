@@ -21,7 +21,7 @@ tags:
   - name: disponibilidad
 
 paths:
-  /api/catalog/units:
+  /api/v1/catalog/units:
     get:
       tags: [unidades]
       summary: Listar unidades
@@ -75,7 +75,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
-  /api/catalog/units/{id}:
+  /api/v1/catalog/units/{id}:
     parameters:
       - name: id
         in: path
@@ -116,7 +116,7 @@ paths:
         '403': { $ref: '#/components/responses/RolInsuficiente' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
 
-  /api/catalog/units/{id}/availability:
+  /api/v1/catalog/units/{id}/availability:
     parameters:
       - name: id
         in: path
@@ -147,7 +147,7 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
 
-  /api/catalog/units/{id}/hold:
+  /api/v1/catalog/units/{id}/hold:
     parameters:
       - name: id
         in: path
@@ -189,7 +189,7 @@ paths:
                     cuposDisponibles: 0
                     timestamp: '2026-09-09T14:30:00Z'
 
-  /api/catalog/units/{id}/release:
+  /api/v1/catalog/units/{id}/release:
     parameters:
       - name: id
         in: path

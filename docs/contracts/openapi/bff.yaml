@@ -31,7 +31,7 @@ tags:
   - name: desarrollo
 
 paths:
-  /api/reservations:
+  /api/v1/reservations:
     post:
       tags: [reservas]
       summary: Crear una reserva
@@ -57,7 +57,7 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/RolInsuficiente' }
 
-  /api/reservations/{id}:
+  /api/v1/reservations/{id}:
     parameters:
       - { name: id, in: path, required: true, schema: { type: string } }
     get:
@@ -70,7 +70,7 @@ paths:
         '403': { $ref: '#/components/responses/RolInsuficiente' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
 
-  /api/reservations/{id}/status:
+  /api/v1/reservations/{id}/status:
     parameters:
       - { name: id, in: path, required: true, schema: { type: string } }
     put:
@@ -89,7 +89,7 @@ paths:
         '404': { $ref: '#/components/responses/NoEncontrado' }
         '409': { description: Transicion invalida o sin disponibilidad }
 
-  /api/catalog/units:
+  /api/v1/catalog/units:
     get:
       tags: [catalogo]
       summary: Listar unidades
@@ -112,7 +112,7 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/RolInsuficiente' }
 
-  /api/catalog/units/{id}:
+  /api/v1/catalog/units/{id}:
     parameters:
       - { name: id, in: path, required: true, schema: { type: string } }
     put:
@@ -131,7 +131,7 @@ paths:
         '403': { $ref: '#/components/responses/RolInsuficiente' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
 
-  /api/report/kpis:
+  /api/v1/report/kpis:
     get:
       tags: [reporteria]
       summary: KPIs de operacion
@@ -144,7 +144,7 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/RolInsuficiente' }
 
-  /api/report/top-units:
+  /api/v1/report/top-units:
     get:
       tags: [reporteria]
       summary: Unidades mas demandadas
@@ -157,7 +157,7 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/RolInsuficiente' }
 
-  /api/audit:
+  /api/v1/audit:
     get:
       tags: [auditoria]
       summary: Consultar el timeline
@@ -168,7 +168,7 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/RolInsuficiente' }
 
-  /api/audit/{reservationId}:
+  /api/v1/audit/{reservationId}:
     parameters:
       - { name: reservationId, in: path, required: true, schema: { type: string } }
     get:
