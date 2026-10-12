@@ -96,7 +96,7 @@ no hay publisher confirms, y los consumidores fallan con `NOT_FOUND` sobre colas
 
 | Concepto de la guía | Estado en AndesStay | Veredicto |
 |---|---|---|
-| Ack del consumidor explícito, nunca auto-ack del protocolo | `acknowledge-mode: manual` y `ackMode = "MANUAL"`, con `basicAck` en los tres consumidores | Cumple |
+| Ack del consumidor explícito, nunca auto-ack del protocolo | `ackMode = "MANUAL"` en los seis `@RabbitListener`, con `basicAck` y `basicNack` explícitos. **NO** en el `application.yml`: ahi seria global y alcanzaria a las DLQ (ver 6.1) | Cumple |
 | Nack o reject explícito | `basicNack(deliveryTag, false, false)` en los tres | Cumple |
 | Publisher confirms (canal en modo confirm) | Ausente. Sin `publisher-confirm-type`, sin `ConfirmCallback`, sin `ReturnsCallback`, sin `mandatory` | Falta |
 | Durabilidad del exchange | `durable: true` en los tres | Cumple |
@@ -194,6 +194,97 @@ reintentos al `application.yml`, aunque su propio `OrderConsumer` también captu
 hace `basicNack` dentro del `catch`. El código de AndesStay reprodujo ese patrón con fidelidad. La
 corrección se documenta aquí para que quede constancia del motivo.
 
+### 6.1 Addendum del 11 de octubre de 2026: el modo manual vuelve, con otro mecanismo
+
+El analisis de arriba es correcto para el problema que trataba: con Spring Retry como motor de los
+reintentos, el modo manual es incompatible, porque una excepcion bajo `MANUAL` no produce un
+rechazo y acaba reencolando. La conclusion de que habia que borrar y quedarse en `AUTO` era la
+buena **mientras el reintento viviera en proceso**.
+
+Lo que cambio no es el analisis, es el requisito. Las rubricas de EP3 y EP4 evaluan, con el 20% de
+la nota, que **cada consumidor gestione el acknowledge de forma explicita**, y con el modo `AUTO`
+el unico ACK del sistema es el del contenedor: no hay un solo `basicAck` en el codigo. Eso obligo a
+buscar una forma de tener las dos cosas.
+
+La respuesta es mover el reintento al broker. Con una cola de espera por flujo, el modo manual deja
+de ser un problema y pasa a ser la unica forma de implementar el diseno:
+
+| | Antes (AUTO + Spring Retry) | Ahora (MANUAL + cola de espera) |
+|---|---|---|
+| Quien reintenta | `RetryOperationsInterceptor`, en proceso | El broker, por vencimiento de TTL |
+| Donde se espera | Un hilo dormido del consumidor | La cola `q.cmd.<flujo>.retry` |
+| Quien confirma | El contenedor | El consumidor, con `basicAck` o `basicNack` |
+| Durante la espera | El consumidor esta retenido | El consumidor queda libre |
+| Si el servicio se reinicia | El reintento pendiente se pierde | Sobrevive: la copia es persistente |
+| Colas | 6 | 9 |
+| Exchanges y bindings | 3 y 9 | **3 y 9**, sin cambios |
+
+**La asimetria del diseno es obligatoria, no una eleccion.** Una cola de RabbitMQ admite UN SOLO
+`x-dead-letter-exchange`. Si la cola de trabajo dead-leterase hacia la cola de espera, ya no podria
+dead-leterar hacia su DLQ, porque un `basicNack(requeue=false)` siempre usa el dead letter de la
+cola y no uno que elija el consumidor. Las dos rutas que el caso necesita --reintentar lo
+transitorio y poner en cuarentena lo agotado-- son incompatibles con un unico dead letter por cola.
+De ahi que se **entre** a la cola de espera con `basicPublish` y se **salga** de la de trabajo con
+`basicNack`.
+
+Y por eso el conteo de exchanges y bindings no cambia: a la cola de espera se publica por el
+exchange por omision, que mantiene un binding implicito a cada cola por su nombre, asi que no hay
+nada nuevo que declarar. Un exchange `cmd.retry` con tres bindings habria dejado la topologia en
+cuatro y doce, y habria obligado a renegociar lo que afirma todo el resto de esta documentacion.
+
+**Correccion aritmetica de paso.** La configuracion anterior, `max-attempts: 3` con multiplicador
+2, producia tres intentos y DOS esperas, de 1 s y 2 s: el peldano de 4 s que la tabla de 9.2
+prometia no se usaba nunca, y era imposible que se usara. La escalera ahora se declara literal
+(`esperas-ms: 1000,2000,4000`), de modo que tres esperas significan cuatro intentos y lo que se lee
+es lo que se espera.
+
+**Lo que NO cambia**, y sigue siendo correcto tal como esta escrito arriba: que el `AUTO` de Spring
+no es el auto-ack del protocolo, que ese es `AcknowledgeMode.NONE`, y que la linea del contrato
+sobre no usarlo se mantiene.
+
+**El bloque `retry` del `application.yml` hay que borrarlo entero, no desactivarlo.** Los dos
+mecanismos no se suman, se corrompen: el interceptor envuelve el metodo del listener, asi que sus
+intentos ocurren DENTRO de cada entrega del broker --3 por 4 son doce ejecuciones por mensaje--, la
+cabecera de intentos no avanzaria entre ellos, y al agotarlos el `RejectAndDontRequeueRecoverer`
+lanza `AmqpRejectAndDontRequeueException`, que atravesaria el catch del error permanente y haria
+que un fallo transitorio saliera clasificado como permanente.
+
+**El cambio con mas riesgo de pasar desapercibido** es `NotifyMetrics.registrarIntento`. Leia el
+intento del `RetryContext` que Spring Retry deja en el hilo; sin ese interceptor,
+`RetrySynchronizationManager.getContext()` devuelve siempre `null`, la condicion nunca se cumple y
+`notify.messages.retried` se queda clavado en CERO para siempre, sin que nada mas falle. Es una de
+las cuatro metricas que exige el item 6.9. Ahora el intento llega como parametro, leido de la
+cabecera `x-andesstay-intentos`.
+
+#### Verificado contra el broker
+
+Ejecutado el 11 de octubre de 2026 en un vhost aislado, con mailpit como servidor de correo:
+
+```
+23:50:44  [Reintento] q.cmd.email - el intento 1/4 fallo; el mensaje espera 3000 ms en q.cmd.email.retry
+23:50:44  [Email] ACK del original tras programar el intento 2/4. tag=1
+23:50:47  [Reintento] q.cmd.email - el intento 2/4 fallo; el mensaje espera 6000 ms en q.cmd.email.retry
+23:50:53  [Reintento] q.cmd.email - el intento 3/4 fallo; el mensaje espera 12000 ms en q.cmd.email.retry
+23:51:05  [Email] NACK sin requeue: agotados los 4 intentos -> DLQ. tag=4
+23:51:05  [DLQ] ... motivo=rejected colaOrigen=q.cmd.email intentosConsumidos=3
+```
+
+Los intervalos entre entregas son exactamente 3 s, 6 s y 12 s, que es la escalera configurada.
+
+Los otros cuatro casos, en la misma sesion:
+
+| Caso | Resultado |
+|---|---|
+| Error permanente (cuerpo ilegible, sin destinatario) | DLQ en el primer intento, y `q.cmd.email.retry` **se queda en cero**: es la ruta diferenciada |
+| Mensaje en la DLQ | `intentosConsumidos=0 (error permanente: no gasto reintentos)`, frente a `intentosConsumidos=3` del caso agotado |
+| Mismo `eventId` dos veces | Dos `basicAck`, un solo correo en mailpit |
+| **Arreglar el SMTP durante la ventana de espera** | El mensaje se recupero en el intento 3/4 y nunca llego a la DLQ, **habiendo sobrevivido a un reinicio completo del servicio**: es lo que prueba que la copia en la cola de espera tenia que ser persistente |
+
+Topologia declarada, comprobada por la API de gestion: **3 exchanges, 9 colas, 9 bindings**, con las
+tres colas de espera sin consumidor, sin `x-message-ttl` propio y con su dead letter apuntando de
+vuelta a `cmd.direct`.
+
+
 ---
 
 ## 7. Divergencias frente al contrato propio del proyecto
@@ -257,7 +348,13 @@ Los valores quedan externalizados por propiedad, no como literales en el código
 
 ### 8.3 Reintentos efectivos
 
+> **SUPERADO por 6.1.** Esta era la configuración recomendada cuando el reintento lo hacía Spring
+> Retry en proceso. **No copiar este bloque**: el bloque `retry` hay que borrarlo entero, porque
+> convive con el reintento del broker multiplicando los intentos y corrompiendo la clasificación
+> de errores. Se conserva aquí como registro de lo que se propuso, no de lo que hay.
+
 ```yaml
+# SUPERADO. La configuracion vigente esta en 6.1.
 spring:
   rabbitmq:
     listener:
@@ -272,8 +369,26 @@ spring:
           multiplier: 2.0
 ```
 
-Sin línea de `acknowledge-mode`: el valor por omisión es `AUTO`, que es el que se busca. Y en los
-consumidores:
+La vigente, con la escalera literal y sin bloque `retry`:
+
+```yaml
+spring:
+  rabbitmq:
+    listener:
+      simple:
+        prefetch: ${NOTIFY_PREFETCH:1}
+        default-requeue-rejected: false
+        # Sin bloque retry y sin acknowledge-mode. Ver 6.1.
+
+andesstay:
+  rabbitmq:
+    reintento:
+      esperas-ms: ${NOTIFY_BACKOFF_LADDER:1000,2000,4000}   # 3 esperas -> 4 intentos
+```
+
+Sin línea de `acknowledge-mode` en el YAML, y es deliberado: el modo manual va en el `ackMode` de
+cada anotación. Puesto en el YAML seria global y alcanzaria tambien a `DeadLetterConsumer`, cuyas
+tres colas acumularian mensajes sin confirmar. Ver 6.1. Y en los consumidores:
 
 - **Error transitorio** (servidor de correo caído, timeout): se lanza la excepción. El interceptor
   reintenta con backoff y, al agotar los intentos, el contenedor rechaza y el mensaje viaja a su
@@ -282,9 +397,11 @@ consumidores:
   en `AmqpRejectAndDontRequeueException`, que va a la DLQ sin gastar reintentos. Es la distinción
   que exige `rabbit.md:140-144`.
 
-El `prefetch: 1` no es decorativo: con tres intentos y multiplicador 2, el hilo del consumidor
-duerme hasta 6 s por mensaje. Sin fair dispatch, un solo consumidor retiene una ventana de 250
-mensajes sin confirmar y el orden de la demostración deja de ser determinista.
+El `prefetch: 1` no es decorativo, aunque su motivo cambió con el rediseño de 6.1: ya no es que el
+hilo del consumidor duerma durante el backoff --las esperas viven ahora en el broker y el hilo queda
+libre en cuanto confirma, que es una ventaja del mecanismo nuevo-- sino el fair dispatch. Sin él, un
+solo consumidor retiene una ventana de 250 mensajes sin confirmar y el orden de la demostración deja
+de ser determinista.
 
 ### 8.4 Idempotencia, observación de la DLQ y métricas
 
@@ -400,8 +517,8 @@ ssh -i ~/.ssh/andesstay-key.pem -L 15672:localhost:15672 ubuntu@<ip-publica-de-e
 | # | Prueba | Resultado esperado |
 |---|---|---|
 | 1 | Confirmar una reserva | Aparecen y se consumen mensajes en `q.cmd.email` y `q.cmd.voucher` |
-| 2 | Publicar un cuerpo que no sea JSON | Llega a `q.cmd.email.dlq` tras los tres intentos, y la cabecera `x-death` indica `rejected` |
-| 3 | Apagar el servidor de correo y publicar | Tres intentos con backoff de 1 s, 2 s y 4 s visibles en el log, y solo entonces la DLQ. En la UI, `deliver_get` de `q.cmd.email` llega a 3 y `messages` de `q.cmd.email.dlq` llega a 1 |
+| 2 | Publicar un cuerpo que no sea JSON | Llega a `q.cmd.email.dlq` **en el primer intento**, sin pasar por `q.cmd.email.retry`: es un error permanente. `x-death` indica `rejected` y la cabecera propia, `intentosConsumidos=0` |
+| 3 | Apagar el servidor de correo y publicar | **Cuatro** intentos con tres esperas de 1 s, 2 s y 4 s, y solo entonces la DLQ. En la UI, `q.cmd.email.retry` sube y baja tres veces, `deliver_get` de `q.cmd.email` llega a 4 y `messages` de `q.cmd.email.dlq` llega a 1. Para que se vea en pantalla, subir la escalera con `NOTIFY_BACKOFF_LADDER=3000,6000,12000`: la UI refresca cada 5 s |
 | 4 | Publicar un mensaje con plantilla inexistente | Va a la DLQ **sin** gastar reintentos, por `AmqpRejectAndDontRequeueException` |
 | 5 | Publicar dos veces el mismo `eventId` | El efecto se ejecuta una sola vez; el duplicado se confirma en silencio |
 | 6 | Detener notify, publicar y reiniciar | Los mensajes se acumulan en la cola y se procesan al volver |
