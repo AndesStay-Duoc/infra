@@ -8,7 +8,8 @@
 # broker y notify ya comprometían 920 MB, y ms-andesstay-mq es el cuarto. Bajar los techos
 # para que entrase dejaría al broker sin margen y la demo evaluada corriendo sobre el swap,
 # con el OOM killer como riesgo en el peor momento posible. Reparto actual, 1.472 MB de
-# 2.048, dejando ~320 MB al sistema y a Docker más el swapfile de 2 GB de provision.sh.
+# 2.048. Con el buzón de correo de prueba son 1.536, y quedan ~500 MB al sistema y a Docker,
+# más el swapfile de 2 GB de provision.sh.
 #
 # Uso en local, solo el broker:
 #   docker compose --env-file .env -f infra/mq/compose.yml up -d rabbitmq1 rabbitmq2 rabbitmq-init
@@ -151,6 +152,40 @@ services:
       - "-d"
       - '{"pattern":"^q\\.cmd\\.","apply-to":"queues","priority":0,"definition":{"ha-mode":"all","ha-sync-mode":"automatic"}}'
 
+  # Buzon de correo de prueba. Recibe SMTP en el 1025 y lo muestra en una bandeja
+  # web en el 8025; no reenvia nada a internet.
+  #
+  # POR QUE ESTA AQUI Y NO ES OPCIONAL. Sin un servidor de correo alcanzable,
+  # TODOS los mensajes de q.cmd.email fallan con MailConnectException, agotan sus
+  # cuatro intentos y acaban en la DLQ. El flujo de reintentos se veria, pero el
+  # camino de exito no existiria, y con el no se puede demostrar ni la
+  # idempotencia ni la recuperacion. Con mailpit los dos caminos son observables,
+  # y para provocar el fallo basta apuntar MAIL_PORT a un puerto cerrado.
+  #
+  # Pesa unos 30 MB: es un binario de Go sin dependencias.
+  mailpit:
+    image: axllent/mailpit:v1.21
+    container_name: andesstay-mailpit
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: 500
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    ports:
+      # Solo en loopback, como la Management UI y por el mismo motivo: un puerto
+      # publicado por Docker omite ufw. La bandeja se mira por tunel SSH:
+      #   ssh -i <clave> -L 8025:localhost:8025 ubuntu@<ip-de-ec2-mq>
+      - "127.0.0.1:8025:8025"
+    networks:
+      - andesstay-mq
+    mem_limit: 64m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8025/readyz > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   notify:
     build:
       context: ../../ms-andesstay-notify
@@ -166,15 +201,24 @@ services:
       # El .env usa RABBITMQ_PASSWORD y la aplicación lee RABBITMQ_PASS: el mapeo va aquí.
       # Cambiar uno sin el otro deja la contraseña vacía y el broker responde ACCESS_REFUSED.
       RABBITMQ_PASS: ${RABBITMQ_PASSWORD}
-      MAIL_HOST: ${MAIL_HOST:-smtp.gmail.com}
-      MAIL_PORT: ${MAIL_PORT:-587}
+      # Por omision, el buzon de prueba del compose. Apuntar MAIL_PORT a un
+      # puerto cerrado es lo que provoca el fallo transitorio de la
+      # demostracion: cuatro intentos con backoff y despues la DLQ.
+      MAIL_HOST: ${MAIL_HOST:-mailpit}
+      MAIL_PORT: ${MAIL_PORT:-1025}
       MAIL_USER: ${MAIL_USER:-}
       MAIL_PASS: ${MAIL_PASS:-}
+      # mailpit no pide autenticacion ni TLS; el application.yml los activa para
+      # un servidor real, asi que aqui se desactivan.
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH: "false"
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE: "false"
     depends_on:
       rabbitmq1:
         condition: service_healthy
       rabbitmq-init:
         condition: service_completed_successfully
+      mailpit:
+        condition: service_healthy
     networks:
       - andesstay-mq
     # No publica el 8085. GET /api/v1/notify/status existe para la evidencia, pero este
