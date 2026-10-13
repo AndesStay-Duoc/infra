@@ -322,15 +322,31 @@ ssh "${SSHO[@]}" "$TARGET" "bash -s" <<'REMOTE'
 set -e
 comprobar() { printf '  [%s] %s → %s\n' "$([ "$2" = "$3" ] && echo ok || echo ERROR)" "$1" "$3"; }
 
-nodos=$(docker exec andesstay-rabbitmq1 rabbitmqctl -q cluster_status --formatter json 2>/dev/null \
-        | tr ',' '\n' | grep -c 'rabbit@rabbitmq' || echo 0)
-printf '  [%s] nodos en el clúster → %s\n' "$([ "$nodos" -ge 2 ] && echo ok || echo ERROR)" "$nodos"
+# OJO con el "|| echo 0" detras de un grep -c: grep YA imprime su propio 0 cuando no encuentra
+# nada, asi que el || anade un segundo cero y la variable queda valiendo "0\n0". La comparacion
+# numerica de abajo falla entonces con "integer expression expected". grep -c nunca necesita ese
+# respaldo; lo que si hace falta es neutralizar su codigo de salida 1, de ahi el "|| true".
+contar() { local n; n=$(eval "$1" 2>/dev/null | grep -c "$2") || true; printf '%s' "${n:-0}"; }
 
-colas=$(docker exec andesstay-rabbitmq1 rabbitmqctl -q list_queues -p andesstay name 2>/dev/null | grep -c '^q\.cmd\.' || echo 0)
+# Se cuentan nombres de nodo UNICOS. cluster_status repite cada nombre en tres secciones
+# --nodos de disco, nodos en ejecucion y versiones-- asi que contar lineas daria 6 con dos
+# nodos. Acotar la seccion con sed tampoco sirve: hay una linea vacia justo tras el encabezado.
+nodos=$(docker exec andesstay-rabbitmq1 rabbitmqctl -q cluster_status 2>/dev/null \
+        | grep -oE '^rabbit@[a-z0-9.-]+' | sort -u | grep -c .) || true
+nodos=${nodos:-0}
+printf '  [%s] nodos en el clúster → %s (2 esperados)\n' "$([ "$nodos" -ge 2 ] && echo ok || echo ERROR)" "$nodos"
+
+colas=$(contar "docker exec andesstay-rabbitmq1 rabbitmqctl -q list_queues -p andesstay name" '^q\.cmd\.')
 printf '  [%s] colas declaradas → %s (9 esperadas)\n' "$([ "$colas" -eq 9 ] && echo ok || echo ERROR)" "$colas"
 
-pol=$(docker exec andesstay-rabbitmq1 rabbitmqctl -q list_policies -p andesstay name 2>/dev/null | grep -c 'ha-colas-cmd' || echo 0)
+pol=$(contar "docker exec andesstay-rabbitmq1 rabbitmqctl -q list_policies -p andesstay" 'ha-colas-cmd')
 printf '  [%s] política de espejado → %s\n' "$([ "$pol" -ge 1 ] && echo ok || echo ERROR)" "$pol"
+
+# Las colas de trabajo tienen que estar espejadas en los dos nodos. Es lo que de verdad prueba
+# que la politica sirve de algo: sin esto, una cola vive en un solo nodo y desaparece del
+# servicio si ese nodo cae, que es justo lo que el cluster pretendia evitar.
+esp=$(contar "docker exec andesstay-rabbitmq1 rabbitmqctl -q list_queues -p andesstay name policy" 'ha-colas-cmd')
+printf '  [%s] colas espejadas → %s (9 esperadas)\n' "$([ "$esp" -eq 9 ] && echo ok || echo ERROR)" "$esp"
 
 comprobar "notify /actuator/health" UP "$(docker exec andesstay-notify wget -qO- http://127.0.0.1:8085/actuator/health 2>/dev/null | grep -o '"status":"[A-Z]*"' | head -1 | cut -d'"' -f4)"
 comprobar "mq /actuator/health"     UP "$(docker exec andesstay-mq     wget -qO- http://127.0.0.1:8086/actuator/health 2>/dev/null | grep -o '"status":"[A-Z]*"' | head -1 | cut -d'"' -f4)"
