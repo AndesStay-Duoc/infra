@@ -403,7 +403,7 @@ fi
 save_state AUTHORIZER_ID "$AUTHORIZER_ID"
 
 # Un despliegue anterior pudo dejar la ruta ANY, que rompe el preflight
-legacy=$(awsq apigatewayv2 get-routes --api-id "$API_ID" --query "Items[?RouteKey=='ANY /api/{proxy+}'].RouteId | [0]")
+legacy=$(awsq1 apigatewayv2 get-routes --api-id "$API_ID" --query "Items[?RouteKey=='ANY /api/{proxy+}'].RouteId | [0]")
 if [[ -n "$legacy" ]]; then
     awsx apigatewayv2 delete-route --api-id "$API_ID" --route-id "$legacy" > /dev/null
     warn "eliminada la ruta ANY /api/{proxy+}, que capturaba el preflight"
@@ -417,7 +417,9 @@ ensure_route() {
     local route_key="$1" method="$2" uri="$3" shared_integration="${4:-}"
     local target integ
 
-    target=$(awsq apigatewayv2 get-routes --api-id "$API_ID" --query "Items[?RouteKey=='$route_key'].Target | [0]")
+    # awsq1 y no awsq: get-routes pagina de 25 en 25 y el CLI aplica --query a cada pagina.
+    # Ver el comentario de awsq1 en lib-aws.sh.
+    target=$(awsq1 apigatewayv2 get-routes --api-id "$API_ID" --query "Items[?RouteKey=='$route_key'].Target | [0]")
 
     if [[ -n "$target" ]]; then
         integ="${target#integrations/}"
@@ -460,8 +462,12 @@ ok "${#RUTAS_CONTRATO[@]} rutas /staff y /guest"
 # existen, y solo entonces se borran las viejas. Al revés, un fallo entre los dos
 # pasos dejaría la API sin ninguna ruta del contrato.
 info "retirando las rutas del contrato sin versión..."
-creadas=$(awsq apigatewayv2 get-routes --api-id "$API_ID" \
-    --query "length(Items[?contains(RouteKey, '/v1/')])")
+# Se cuentan las CLAVES y no se usa length(): con varias paginas, length() devuelve un numero
+# por pagina y la comparacion de abajo compararia contra "25 1". Convirtiendo los tabuladores en
+# saltos de linea, el conteo si agrega bien entre paginas.
+creadas=$(awsx apigatewayv2 get-routes --api-id "$API_ID" --output text \
+    --query "Items[?contains(RouteKey, '/v1/')].RouteKey" 2>/dev/null \
+    | tr -d '\r' | tr '\t' '\n' | grep -c '/v1/')
 if [[ "${creadas:-0}" -lt "${#RUTAS_CONTRATO[@]}" ]]; then
     warn "solo hay $creadas rutas versionadas de ${#RUTAS_CONTRATO[@]}; no se borra ninguna vieja"
 else
@@ -469,7 +475,7 @@ else
     for rk in "${RUTAS_CONTRATO[@]}"; do
         # La misma route key sin el /v1, que es la que hay que retirar.
         antigua="${rk/\/v1\//\/}"
-        rid=$(awsq apigatewayv2 get-routes --api-id "$API_ID" \
+        rid=$(awsq1 apigatewayv2 get-routes --api-id "$API_ID" \
             --query "Items[?RouteKey=='$antigua'].RouteId | [0]")
         if [[ -n "$rid" ]]; then
             awsx apigatewayv2 delete-route --api-id "$API_ID" --route-id "$rid" > /dev/null
