@@ -201,6 +201,11 @@ services:
       # El .env usa RABBITMQ_PASSWORD y la aplicación lee RABBITMQ_PASS: el mapeo va aquí.
       # Cambiar uno sin el otro deja la contraseña vacía y el broker responde ACCESS_REFUSED.
       RABBITMQ_PASS: ${RABBITMQ_PASSWORD}
+      # Escalera de reintentos. TRES esperas significan CUATRO intentos. Sin esta linea
+      # la variable del .env no llegaba al contenedor y siempre regia el valor por
+      # omision del application.yml, de modo que subirla para una demostracion no tenia
+      # ningun efecto.
+      NOTIFY_BACKOFF_LADDER: ${NOTIFY_BACKOFF_LADDER:-1000,2000,4000}
       # Por omision, el buzon de prueba del compose. Apuntar MAIL_PORT a un
       # puerto cerrado es lo que provoca el fallo transitorio de la
       # demostracion: cuatro intentos con backoff y despues la DLQ.
