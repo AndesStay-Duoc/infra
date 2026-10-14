@@ -20,7 +20,7 @@ tags:
   - name: auditoria
 
 paths:
-  /api/audit:
+  /api/v1/audit:
     get:
       tags: [auditoria]
       summary: Consultar el timeline con filtros
@@ -64,7 +64,7 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/RolInsuficiente' }
 
-  /api/audit/{reservationId}:
+  /api/v1/audit/{reservationId}:
     parameters:
       - name: reservationId
         in: path

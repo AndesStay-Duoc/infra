@@ -87,6 +87,29 @@ awsq() {
     printf '%s' "$out"
 }
 
+# Como awsq, pero para consultas de UN SOLO valor sobre listas que el CLI pagina.
+#
+# El CLI pagina del lado del cliente y aplica --query a CADA pagina, asi que una consulta como
+# "Items[?RouteKey=='X'].Target | [0]" devuelve una linea por pagina: el valor real donde esta, y
+# un "None" en las demas. En Git Bash esas lineas van separadas por CRLF, de modo que el valor que
+# recoge $(...) es "integrations/abc123\r\nNone" y la llamada siguiente falla con
+# NotFoundException.
+#
+# No se noto hasta versionar las rutas porque get-routes pagina de 25 en 25 y la API tenia 20
+# rutas; al versionar llega a 36 en el pico, con las 16 viejas conviviendo con las 16 nuevas.
+#
+# Se descartan las lineas "None", se quita el retorno de carro y se toma la primera que quede.
+# No sustituye a awsq: hay consultas que SI esperan varios valores, como la de
+# list-instance-profiles, y colapsarlas a una linea las romperia.
+awsq1() {
+    local out
+    # El || true no es decorativo: grep -v devuelve 1 cuando NO deja ninguna linea, que es
+    # justo el caso normal de "el recurso todavia no existe". Con el set -euo pipefail del
+    # script que llama, esa tuberia mataria el despliegue sin imprimir ningun error.
+    out=$(awsx "$@" --output text 2>/dev/null | tr -d '\r' | grep -v '^None$' | head -n 1) || true
+    printf '%s' "$out"
+}
+
 require_session() {
     log "Comprobando la sesión AWS (perfil $AWS_PROFILE_NAME, CLI $AWS_MODE)"
     local salida
