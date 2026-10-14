@@ -134,8 +134,16 @@ Ver [`estados.md`](../estados.md).
 2. **Idempotencia por `eventId`**: un duplicado se confirma sin reejecutar el efecto.
 3. Ante error, **`NACK` con `requeue=false`** tras agotar los reintentos, para que el mensaje
    viaje a su DLQ por el `x-dead-letter-exchange`.
-4. Reintentos con backoff exponencial: 3 intentos por defecto, configurable con
-   `NOTIFY_MAX_ATTEMPTS`.
+4. **Reintentos con backoff, en el broker y no en proceso.** El consumidor publica una copia del
+   mensaje en `q.cmd.<flujo>.retry` con la propiedad `expiration` puesta al peldano que toque, y
+   confirma el original; nadie consume esa cola, asi que lo unico que saca al mensaje de ahi es el
+   vencimiento de su plazo, y entonces su `x-dead-letter-exchange` lo devuelve a la cola de
+   trabajo. La escalera se declara literal en `NOTIFY_BACKOFF_LADDER`, por omision
+   `1000,2000,4000`: **tres esperas significan cuatro intentos**.
+
+   La cuenta de intentos viaja en la cabecera propia `x-andesstay-intentos`, y no en la `x-death`
+   del broker: esa se identifica por el par `(queue, reason)`, de modo que un vencimiento por TTL y
+   un desborde por `x-max-length` sobre la misma cola producen contadores distintos.
 
 ### Distinguir el error transitorio del permanente
 

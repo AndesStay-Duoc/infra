@@ -84,24 +84,42 @@ services:
       # existe en esta red. Sin esta variable, reservations no puede consultar
       # disponibilidad y toda creación de reserva falla.
       CATALOG_BASE_URL: http://catalog:8082
-      # Sin Kafka ni RabbitMQ desplegados, los publicadores de eventos quedan
-      # desactivados. Ver ReservationEventPublisher y NotificationPublisher.
-      #
       # Hay una bandera POR BROKER, no una compartida: antes la única
       # ANDESSTAY_EVENTS_ENABLED ataba los dos, así que activar las colas revivía
       # el productor de Kafka contra un clúster inexistente y sumaba los 2 s de
       # max.block.ms a cada escritura de reserva.
       #
-      # La de RabbitMQ pasa a "true" recién cuando ec2-mq esté arriba y su 5672
-      # responda. Levantarla antes hace que convertAndSend, que es SÍNCRONO,
-      # lance AmqpConnectException y cada POST de reserva termine en 500.
-      ANDESSTAY_EVENTS_RABBIT_ENABLED: "false"
+      # La de RabbitMQ ya está en "true": ec2-mq existe y su 5672 responde. Es
+      # importante que no se active antes de eso, porque convertAndSend es
+      # SÍNCRONO y sin broker lanza AmqpConnectException, con lo que cada POST
+      # de reserva terminaría en 500.
+      ANDESSTAY_EVENTS_RABBIT_ENABLED: "${ANDESSTAY_EVENTS_RABBIT_ENABLED:-true}"
+      # Kafka sigue desactivado: ese clúster no está desplegado.
       ANDESSTAY_EVENTS_KAFKA_ENABLED: "false"
-      # Va de la mano con la línea anterior. Actuator registra un health
-      # indicator de RabbitMQ en cuanto ve spring-boot-starter-amqp en el
-      # classpath; sin broker lo marca DOWN y /actuator/health devuelve 503,
-      # con lo que el contenedor entero queda "unhealthy" aunque la aplicación
-      # funcione. Al reactivar los eventos, esta línea se quita también.
+
+      # Dirección del clúster de la otra instancia. RABBITMQ_HOST es la IP
+      # PRIVADA de ec2-mq, que crear-mq.sh deja en el estado como MQ_PRIVATE_IP;
+      # el tráfico no sale de la VPC y el Security Group del broker solo acepta
+      # el 5672 desde el grupo de esta instancia.
+      RABBITMQ_HOST: ${RABBITMQ_HOST:?Falta RABBITMQ_HOST. Ejecutar scripts/crear-mq.sh y copiar MQ_PRIVATE_IP}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-andesstay}
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASS: ${RABBITMQ_PASSWORD}
+
+      # El health indicator de RabbitMQ queda DESACTIVADO a propósito, aunque el
+      # broker ya exista, y conviene tener claro por qué: Actuator lo registra en
+      # cuanto ve spring-boot-starter-amqp en el classpath, y marca el contenedor
+      # entero "unhealthy" si el broker no responde.
+      #
+      # Para reservations eso sería un error de diseño. Publicar un evento es
+      # accesorio: si la mensajería se cae, las reservas se siguen creando y
+      # persistiendo en MySQL, que es lo que no se puede perder. Dejar que un
+      # parpadeo del broker convierta el restart: unless-stopped en un bucle de
+      # reinicios sacrificaría lo esencial por lo accesorio.
+      #
+      # En notify es justo al revés, y allí sí está activado: un consumidor que
+      # no alcanza su broker no sirve para nada.
       MANAGEMENT_HEALTH_RABBIT_ENABLED: "false"
     depends_on:
       mysql: {condition: service_healthy}
