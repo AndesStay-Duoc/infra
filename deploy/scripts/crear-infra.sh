@@ -59,23 +59,28 @@ AMI_PARAM="/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/e
 # Rutas del contrato (infra/docs/contracts/rutas-gateway.md). Cada una lleva su
 # propia integración: API Gateway exige que toda variable de path de la URI de
 # integración exista en la route key, así que no pueden compartir una con {proxy}.
+#
+# El /v1 va DESPUÉS del prefijo de audiencia, no antes: /staff/v1/reservations. La
+# regla de nginx captura todo lo que sigue a /staff o /guest y lo reconstruye como
+# /api/<captura>, así que la versión viaja dentro de la captura y esa regla no tuvo
+# que cambiar. Ver el bloque location ~ ^/(staff|guest)/(.*)$ del template.
 RUTAS_CONTRATO=(
-    "POST /guest/reservations"
-    "GET /guest/reservations"
-    "GET /guest/reservations/{id}"
-    "PUT /guest/reservations/{id}/status"
-    "GET /guest/catalog/units"
-    "POST /staff/reservations"
-    "GET /staff/reservations"
-    "GET /staff/reservations/{id}"
-    "PUT /staff/reservations/{id}/status"
-    "GET /staff/catalog/units"
-    "POST /staff/catalog/units"
-    "PUT /staff/catalog/units/{id}"
-    "GET /staff/report/kpis"
-    "GET /staff/report/top-units"
-    "GET /staff/audit/events"
-    "GET /staff/audit/reservations/{id}/timeline"
+    "POST /guest/v1/reservations"
+    "GET /guest/v1/reservations"
+    "GET /guest/v1/reservations/{id}"
+    "PUT /guest/v1/reservations/{id}/status"
+    "GET /guest/v1/catalog/units"
+    "POST /staff/v1/reservations"
+    "GET /staff/v1/reservations"
+    "GET /staff/v1/reservations/{id}"
+    "PUT /staff/v1/reservations/{id}/status"
+    "GET /staff/v1/catalog/units"
+    "POST /staff/v1/catalog/units"
+    "PUT /staff/v1/catalog/units/{id}"
+    "GET /staff/v1/report/kpis"
+    "GET /staff/v1/report/top-units"
+    "GET /staff/v1/audit/events"
+    "GET /staff/v1/audit/reservations/{id}/timeline"
 )
 
 # Rutas que consume la SPA, que llama a /api/*. Un método por ruta y nunca ANY:
@@ -398,7 +403,7 @@ fi
 save_state AUTHORIZER_ID "$AUTHORIZER_ID"
 
 # Un despliegue anterior pudo dejar la ruta ANY, que rompe el preflight
-legacy=$(awsq apigatewayv2 get-routes --api-id "$API_ID" --query "Items[?RouteKey=='ANY /api/{proxy+}'].RouteId | [0]")
+legacy=$(awsq1 apigatewayv2 get-routes --api-id "$API_ID" --query "Items[?RouteKey=='ANY /api/{proxy+}'].RouteId | [0]")
 if [[ -n "$legacy" ]]; then
     awsx apigatewayv2 delete-route --api-id "$API_ID" --route-id "$legacy" > /dev/null
     warn "eliminada la ruta ANY /api/{proxy+}, que capturaba el preflight"
@@ -412,7 +417,9 @@ ensure_route() {
     local route_key="$1" method="$2" uri="$3" shared_integration="${4:-}"
     local target integ
 
-    target=$(awsq apigatewayv2 get-routes --api-id "$API_ID" --query "Items[?RouteKey=='$route_key'].Target | [0]")
+    # awsq1 y no awsq: get-routes pagina de 25 en 25 y el CLI aplica --query a cada pagina.
+    # Ver el comentario de awsq1 en lib-aws.sh.
+    target=$(awsq1 apigatewayv2 get-routes --api-id "$API_ID" --query "Items[?RouteKey=='$route_key'].Target | [0]")
 
     if [[ -n "$target" ]]; then
         integ="${target#integrations/}"
@@ -444,6 +451,39 @@ for rk in "${RUTAS_CONTRATO[@]}"; do
     ensure_route "$rk" "$metodo" "http://$PUBLIC_IP$ruta" > /dev/null
 done
 ok "${#RUTAS_CONTRATO[@]} rutas /staff y /guest"
+
+# Las rutas sin versión quedan huérfanas, y mientras exista el shim de nginx
+# SEGUIRÍAN RESPONDIENDO 200: el gateway las enruta, nginx las reescribe a
+# /api/v1/** y el BFF las atiende. Es decir, el prefijo legado no se retira solo
+# al versionar. ensure_route crea y actualiza pero nunca borra, así que hay que
+# hacerlo aquí.
+#
+# El orden importa: primero se crean las nuevas (arriba), después se comprueba que
+# existen, y solo entonces se borran las viejas. Al revés, un fallo entre los dos
+# pasos dejaría la API sin ninguna ruta del contrato.
+info "retirando las rutas del contrato sin versión..."
+# Se cuentan las CLAVES y no se usa length(): con varias paginas, length() devuelve un numero
+# por pagina y la comparacion de abajo compararia contra "25 1". Convirtiendo los tabuladores en
+# saltos de linea, el conteo si agrega bien entre paginas.
+creadas=$(awsx apigatewayv2 get-routes --api-id "$API_ID" --output text \
+    --query "Items[?contains(RouteKey, '/v1/')].RouteKey" 2>/dev/null \
+    | tr -d '\r' | tr '\t' '\n' | grep -c '/v1/')
+if [[ "${creadas:-0}" -lt "${#RUTAS_CONTRATO[@]}" ]]; then
+    warn "solo hay $creadas rutas versionadas de ${#RUTAS_CONTRATO[@]}; no se borra ninguna vieja"
+else
+    borradas=0
+    for rk in "${RUTAS_CONTRATO[@]}"; do
+        # La misma route key sin el /v1, que es la que hay que retirar.
+        antigua="${rk/\/v1\//\/}"
+        rid=$(awsq1 apigatewayv2 get-routes --api-id "$API_ID" \
+            --query "Items[?RouteKey=='$antigua'].RouteId | [0]")
+        if [[ -n "$rid" ]]; then
+            awsx apigatewayv2 delete-route --api-id "$API_ID" --route-id "$rid" > /dev/null
+            borradas=$((borradas + 1))
+        fi
+    done
+    ok "$borradas ruta(s) sin versión retiradas"
+fi
 
 info "rutas de consumo de la SPA..."
 INT_API=""
@@ -607,9 +647,15 @@ done
 check "SPA por API Gateway"               200 "$(curl -s -o /dev/null -w '%{http_code}' "$WEB_ORIGIN/")"
 check "ruta del router (/dashboard)"      200 "$(curl -s -o /dev/null -w '%{http_code}' "$WEB_ORIGIN/dashboard")"
 check "config.json apunta a la API"       "$API_ORIGIN" "$(curl -s "$WEB_ORIGIN/assets/config.json" | sed -n 's/.*"apiUri": *"\([^"]*\)".*/\1/p')"
-check "API sin token (authorizer)"        401 "$(curl -s -o /dev/null -w '%{http_code}' "$API_ORIGIN/api/me")"
-check "preflight CORS desde la SPA"       204 "$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS "$API_ORIGIN/api/me" -H "Origin: $WEB_ORIGIN" -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: authorization')"
-check "instancia sin X-Gateway-Secret"    403 "$(curl -s -o /dev/null -w '%{http_code}' "http://$PUBLIC_IP/api/me")"
+check "API sin token (authorizer)"        401 "$(curl -s -o /dev/null -w '%{http_code}' "$API_ORIGIN/api/v1/me")"
+# El shim de nginx tiene que responder 401 y no 404: un 404 significaria que el
+# prefijo legado ya no llega al BFF, y entonces un bundle de SPA sin actualizar
+# estaria roto sin que nada mas lo delatara.
+check "shim del prefijo legado"           401 "$(curl -s -o /dev/null -w '%{http_code}' "$API_ORIGIN/api/me")"
+check "preflight CORS desde la SPA"       204 "$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS "$API_ORIGIN/api/v1/me" -H "Origin: $WEB_ORIGIN" -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: authorization')"
+check "instancia sin X-Gateway-Secret"    403 "$(curl -s -o /dev/null -w '%{http_code}' "http://$PUBLIC_IP/api/v1/me")"
+# El shim no puede ser una via de escape de la cabecera compartida.
+check "shim sin X-Gateway-Secret"         403 "$(curl -s -o /dev/null -w '%{http_code}' "http://$PUBLIC_IP/api/me")"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 12. Resumen

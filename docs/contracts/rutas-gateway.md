@@ -24,7 +24,7 @@ El split se conserva igualmente, por dos razones:
    `ms-andesstay-bff`.
 
 La diferenciación real, entonces, la hace el BFF: un `Cliente` que llame a
-`/staff/report/kpis` obtiene `403`, no `401`.
+`/staff/v1/report/kpis` obtiene `403`, no `401`.
 
 ## Authorizer
 
@@ -47,22 +47,22 @@ Todas las rutas integran contra el mismo backend: `ms-andesstay-bff` en `ec2-app
 
 | # | Método | Ruta en el gateway | Authorizer | Destino en el BFF | Roles |
 |---|---|---|---|---|---|
-| 1 | `POST` | `/guest/reservations` | `entra-andesstay` | `POST /api/reservations` | Huésped |
-| 2 | `GET` | `/guest/reservations` | `entra-andesstay` | `GET /api/reservations` | Huésped |
-| 3 | `GET` | `/guest/reservations/{id}` | `entra-andesstay` | `GET /api/reservations/{id}` | Huésped |
-| 4 | `PUT` | `/guest/reservations/{id}/status` | `entra-andesstay` | `PUT /api/reservations/{id}/status` | Huésped, solo cancelar |
-| 5 | `GET` | `/guest/catalog/units` | `entra-andesstay` | `GET /api/catalog/units` | ⚠ ver nota |
-| 6 | `POST` | `/staff/reservations` | `entra-andesstay` | `POST /api/reservations` | Recepcionista |
-| 7 | `GET` | `/staff/reservations` | `entra-andesstay` | `GET /api/reservations` | Admin, Recepcionista |
-| 8 | `GET` | `/staff/reservations/{id}` | `entra-andesstay` | `GET /api/reservations/{id}` | Admin, Recepcionista |
-| 9 | `PUT` | `/staff/reservations/{id}/status` | `entra-andesstay` | `PUT /api/reservations/{id}/status` | Admin, Recepcionista |
-| 10 | `GET` | `/staff/catalog/units` | `entra-andesstay` | `GET /api/catalog/units` | Admin, Recepcionista |
-| 11 | `POST` | `/staff/catalog/units` | `entra-andesstay` | `POST /api/catalog/units` | Admin |
-| 12 | `PUT` | `/staff/catalog/units/{id}` | `entra-andesstay` | `PUT /api/catalog/units/{id}` | Admin |
-| 13 | `GET` | `/staff/report/kpis` | `entra-andesstay` | `GET /api/report/kpis` | Admin |
-| 14 | `GET` | `/staff/report/top-units` | `entra-andesstay` | `GET /api/report/top-units` | Admin |
-| 15 | `GET` | `/staff/audit/events` | `entra-andesstay` | `GET /api/audit/events` | Admin, Auditor |
-| 16 | `GET` | `/staff/audit/reservations/{id}/timeline` | `entra-andesstay` | `GET /api/audit/reservations/{id}/timeline` | Admin, Auditor |
+| 1 | `POST` | `/guest/v1/reservations` | `entra-andesstay` | `POST /api/v1/reservations` | Huésped |
+| 2 | `GET` | `/guest/v1/reservations` | `entra-andesstay` | `GET /api/v1/reservations` | Huésped |
+| 3 | `GET` | `/guest/v1/reservations/{id}` | `entra-andesstay` | `GET /api/v1/reservations/{id}` | Huésped |
+| 4 | `PUT` | `/guest/v1/reservations/{id}/status` | `entra-andesstay` | `PUT /api/v1/reservations/{id}/status` | Huésped, solo cancelar |
+| 5 | `GET` | `/guest/v1/catalog/units` | `entra-andesstay` | `GET /api/v1/catalog/units` | ⚠ ver nota |
+| 6 | `POST` | `/staff/v1/reservations` | `entra-andesstay` | `POST /api/v1/reservations` | Recepcionista |
+| 7 | `GET` | `/staff/v1/reservations` | `entra-andesstay` | `GET /api/v1/reservations` | Admin, Recepcionista |
+| 8 | `GET` | `/staff/v1/reservations/{id}` | `entra-andesstay` | `GET /api/v1/reservations/{id}` | Admin, Recepcionista |
+| 9 | `PUT` | `/staff/v1/reservations/{id}/status` | `entra-andesstay` | `PUT /api/v1/reservations/{id}/status` | Admin, Recepcionista |
+| 10 | `GET` | `/staff/v1/catalog/units` | `entra-andesstay` | `GET /api/v1/catalog/units` | Admin, Recepcionista |
+| 11 | `POST` | `/staff/v1/catalog/units` | `entra-andesstay` | `POST /api/v1/catalog/units` | Admin |
+| 12 | `PUT` | `/staff/v1/catalog/units/{id}` | `entra-andesstay` | `PUT /api/v1/catalog/units/{id}` | Admin |
+| 13 | `GET` | `/staff/v1/report/kpis` | `entra-andesstay` | `GET /api/v1/report/kpis` | Admin |
+| 14 | `GET` | `/staff/v1/report/top-units` | `entra-andesstay` | `GET /api/v1/report/top-units` | Admin |
+| 15 | `GET` | `/staff/v1/audit/events` | `entra-andesstay` | `GET /api/v1/audit/events` | Admin, Auditor |
+| 16 | `GET` | `/staff/v1/audit/reservations/{id}/timeline` | `entra-andesstay` | `GET /api/v1/audit/reservations/{id}/timeline` | Admin, Auditor |
 
 ### Ruta de consumo de la SPA
 
@@ -70,10 +70,10 @@ A las 16 anteriores se suma una decimoséptima:
 
 | Método | Ruta | Authorizer | Destino |
 |---|---|---|---|
-| `GET` | `/api/{proxy+}` | `entra-andesstay` | `/api/**` del BFF, sin traducción |
-| `POST` | `/api/{proxy+}` | `entra-andesstay` | idem |
-| `PUT` | `/api/{proxy+}` | `entra-andesstay` | idem |
-| `DELETE` | `/api/{proxy+}` | `entra-andesstay` | idem |
+| `GET` | `/api/v1/{proxy+}` | `entra-andesstay` | `/api/v1/**` del BFF, sin traducción |
+| `POST` | `/api/v1/{proxy+}` | `entra-andesstay` | idem |
+| `PUT` | `/api/v1/{proxy+}` | `entra-andesstay` | idem |
+| `DELETE` | `/api/v1/{proxy+}` | `entra-andesstay` | idem |
 
 **Los cuatro métodos van por separado; `ANY` no sirve.** `ANY` también captura el `OPTIONS` del
 preflight, y entonces el authorizer lo evalúa: como el navegador no envía `Authorization` en un
@@ -81,17 +81,17 @@ preflight, responde `401` y la petición real nunca llega a salir. Declarando lo
 el `OPTIONS` no coincide con ninguna ruta y lo atiende el manejador de CORS de API Gateway, que
 devuelve `204`. Es el mismo motivo por el que las 16 rutas explícitas no dan problema.
 
-Existe porque **el frontend llama a `/api/*`, no a `/staff/*` ni `/guest/*`**: sus servicios
+Existe porque **el frontend llama a `/api/v1/*`, no a `/staff/v1/*` ni `/guest/v1/*`**: sus servicios
 (`catalog.service.ts`, `report.service.ts`, `reservation.service.ts`, `audit.service.ts` y el
-`GET /api/me` de `auth.service.ts`) construyen las URL sobre `apiUri` + `/api/...`. Además
-`/api/me` no tiene equivalente en la tabla de 16, y es el endpoint del que la SPA obtiene
+`GET /api/v1/me` de `auth.service.ts`) construyen las URL sobre `apiUri` + `/api/v1/...`. Además
+`/api/v1/me` no tiene equivalente en la tabla de 16, y es el endpoint del que la SPA obtiene
 `effectiveRoles`.
 
 Las dos superficies conviven a propósito:
 
-- `/staff/*` y `/guest/*` son el **contrato público** del API Manager: rutas enumeradas, cada una
+- `/staff/v1/*` y `/guest/v1/*` son el **contrato público** del API Manager: rutas enumeradas, cada una
   con su authorizer y su integración, que es lo que evalúa el indicador 1.
-- `/api/{proxy+}` es la que **consume la SPA**. Lleva el mismo authorizer, así que no abre ninguna
+- `/api/v1/{proxy+}` es la que **consume la SPA**. Lleva el mismo authorizer, así que no abre ninguna
   brecha: sin un JWT válido de Entra ID devuelve `401` igual que las demás.
 
 Al ser rutas comodín, comparten una única integración cuya URI sí puede usar `{proxy}`; las 16
@@ -102,7 +102,7 @@ en la route key.
 proteger: una petición a un path no declarado devuelve `404` del gateway.
 
 > **Nota sobre la ruta 5.** La ruta existe en el gateway y pasa el authorizer, pero **un `Cliente`
-> recibe `403`**: `SecurityConfig` del BFF restringe `GET /api/catalog/**` a `Admin` y `Operador`.
+> recibe `403`**: `SecurityConfig` del BFF restringe `GET /api/v1/catalog/**` a `Admin` y `Operador`.
 > Hoy solo la pueden usar esos dos roles, igual que la ruta 10.
 >
 > Se documenta así, en lugar de abrirla, porque habilitar el flujo de huésped exige dos cambios
@@ -110,7 +110,7 @@ proteger: una petición a un path no declarado devuelve `404` del gateway.
 > a `ms-andesstay-catalog`, que usa un converter simple y no derivaría `ROLE_Cliente`. Queda como
 > mejora pendiente, no como defecto silencioso.
 >
-> Un `Cliente` alcanza únicamente `/api/reservations/**`: crear una reserva y consultar las suyas.
+> Un `Cliente` alcanza únicamente `/api/v1/reservations/**`: crear una reserva y consultar las suyas.
 
 Los endpoints internos `hold` y `release` de catalog **no se publican en el gateway**: solo los
 llama `ms-andesstay-reservations` dentro de la red privada.
@@ -120,8 +120,8 @@ llama `ms-andesstay-reservations` dentro de la red privada.
 Cada ruta lleva **su propia integración** de tipo HTTP_PROXY, cuya URI replica el mismo path:
 
 ```
-GET  /staff/report/kpis          ->  http://<elastic-ip>/staff/report/kpis
-GET  /staff/reservations/{id}    ->  http://<elastic-ip>/staff/reservations/{id}
+GET  /staff/v1/report/kpis          ->  http://<elastic-ip>/staff/v1/report/kpis
+GET  /staff/v1/reservations/{id}    ->  http://<elastic-ip>/staff/v1/reservations/{id}
 ```
 
 Una integración única con `{proxy}` compartida por las 16 rutas **no es válida**: API Gateway
@@ -130,13 +130,13 @@ creación con `The following path variables in the integration URI are not prese
 key: proxy`. Solo sería posible con una ruta comodín `ANY /{proxy+}`, que dejaría de cumplir el
 requisito de 16 rutas declaradas.
 
-La traducción de `/staff/*` y `/guest/*` al `/api/*` que entiende el BFF **no se hace con
+La traducción de `/staff/v1/*` y `/guest/v1/*` al `/api/v1/*` que entiende el BFF **no se hace con
 parameter mapping**, sino en nginx (`infra/deploy/nginx/conf.d/andesstay.conf.template`,
 bloque `location ~ ^/(staff|guest)/(.*)$`). Así queda versionada en git y revisable en un PR,
 en lugar de existir solo en la consola de AWS y perderse cuando el laboratorio se reinicia.
 
 La integración añade además la cabecera `X-Gateway-Secret` por parameter mapping. Nginx
-devuelve `403` a toda petición a `/api/**`, `/staff/**` o `/guest/**` que no la traiga: es lo
+devuelve `403` a toda petición a `/api/v1/**`, `/staff/v1/**` o `/guest/v1/**` que no la traiga: es lo
 que impide alcanzar el BFF saltándose el gateway, ya que el puerto 80 tiene que estar abierto
 a internet (las integraciones de API Gateway salen desde IPs de AWS que no se pueden acotar en
 un Security Group).
@@ -159,7 +159,7 @@ La rúbrica penaliza los sobrepermisos, así que nada de comodines.
 | Campo | Valor |
 |---|---|
 | `Access-Control-Allow-Origins` | El origen exacto del frontend. En desarrollo `http://localhost:4200`, en la nube la URL pública. **Nunca `*`** |
-| `Access-Control-Allow-Methods` | `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`. Sin `PATCH`. `DELETE` es necesario: `catalog.service.ts` borra unidades con `DELETE /api/catalog/units/{id}` |
+| `Access-Control-Allow-Methods` | `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`. Sin `PATCH`. `DELETE` es necesario: `catalog.service.ts` borra unidades con `DELETE /api/v1/catalog/units/{id}` |
 | `Access-Control-Allow-Headers` | `authorization`, `content-type` |
 | `Access-Control-Expose-Headers` | *(vacío)* |
 | `Access-Control-Allow-Credentials` | `false`. El token viaja en la cabecera, no en cookies |
@@ -191,7 +191,7 @@ Dos casos más conviene documentar aunque no los pida la rúbrica:
   Debe dar `401` desde el gateway, porque el authorizer valida `aud`. Con una sola app
   registration ya no existe el caso de "token del otro tenant" que describía la versión anterior
   de este documento.
-- **Petición sin `X-Gateway-Secret`** — un `curl` directo a `http://<ip>/api/me` saltándose el
+- **Petición sin `X-Gateway-Secret`** — un `curl` directo a `http://<ip>/api/v1/me` saltándose el
   gateway. Debe dar `403` desde nginx, sin llegar al BFF.
 
 Todo se documenta en una colección Postman versionada en `infra/docs/evidencias/`.

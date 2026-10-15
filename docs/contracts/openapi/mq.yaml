@@ -1,0 +1,537 @@
+openapi: 3.0.3
+info:
+  title: ms-andesstay-mq
+  description: >
+    Administracion de la mensajeria: colas, exchanges y bindings del cluster de RabbitMQ.
+
+    El servicio habla con el broker por DOS puertos. Las escrituras van por AMQP (5672) con
+    AmqpAdmin, y los listados por la API HTTP de gestion (15672). El motivo es que el protocolo
+    AMQP 0-9-1 define queue.declare y queue.delete pero no define ninguna operacion de listado:
+    no existe un queue.list. Consecuencia practica: si el 15672 no es alcanzable, las altas y las
+    bajas siguen funcionando y los GET de coleccion devuelven 503.
+
+    La unica lectura que NO depende de la API de gestion es GET /api/v1/mq/queues/{nombre}, que va
+    por AMQP. Existe para poder diagnosticar precisamente cuando la API de gestion no responde.
+
+    Todas las rutas exigen el rol Admin. El servicio no se publica en el API Gateway: es una
+    herramienta de operacion y se alcanza por tunel SSH contra ec2-mq.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8086
+    description: Desarrollo local
+  - url: http://ec2-mq:8086
+    description: Despliegue en EC2 (red interna de la instancia; publicado solo en loopback)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: colas
+  - name: exchanges
+  - name: bindings
+
+paths:
+  /api/v1/mq/queues:
+    get:
+      tags: [colas]
+      summary: Listar las colas del vhost
+      description: >
+        Pasa por la API de gestion del 15672. Devuelve 503 si no es alcanzable, porque AMQP no
+        tiene operacion de listado y no hay forma de responder por la otra via.
+      operationId: listarColas
+      responses:
+        '200':
+          description: Colas del vhost, ordenadas por nombre
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ColaResumen' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '503': { $ref: '#/components/responses/GestionNoDisponible' }
+
+    post:
+      tags: [colas]
+      summary: Declarar una cola
+      description: >
+        Declarar es idempotente en AMQP: repetir la peticion con los MISMOS argumentos vuelve a
+        responder bien y no duplica nada. Repetirla con argumentos distintos es lo que el broker
+        rechaza con PRECONDITION_FAILED, y sale como 409.
+
+        Un nombre que empiece por q.cmd. queda espejado automaticamente en los dos nodos por la
+        politica ha-colas-cmd del broker. No aparece en ningun argumento: lo decide el nombre.
+      operationId: crearCola
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CrearColaRequest' }
+      responses:
+        '201':
+          description: Cola declarada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperacionResultado' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '409': { $ref: '#/components/responses/TopologiaIncompatible' }
+        '503': { $ref: '#/components/responses/BrokerNoDisponible' }
+
+  /api/v1/mq/queues/{nombre}:
+    parameters:
+      - $ref: '#/components/parameters/NombreRecurso'
+
+    get:
+      tags: [colas]
+      summary: Describir una cola
+      description: >
+        Va por AMQP con getQueueInfo, asi que responde aunque la API de gestion del 15672 no sea
+        alcanzable. Por eso devuelve menos campos que el listado: los que faltan solo los conoce
+        la API de gestion, y se omiten antes que inventarlos.
+      operationId: describirCola
+      responses:
+        '200':
+          description: Nombre, mensajes y consumidores
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ColaResumen' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+    delete:
+      tags: [colas]
+      summary: Eliminar una cola
+      description: >
+        Irreversible: se van tambien los mensajes que la cola tuviera dentro. Los nombres de la
+        topologia de AndesStay estan protegidos y responden 409 sin forzar=true.
+      operationId: eliminarCola
+      parameters:
+        - $ref: '#/components/parameters/Forzar'
+      responses:
+        '204': { description: Cola eliminada }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/RecursoProtegido' }
+
+  /api/v1/mq/queues/{nombre}/purge:
+    parameters:
+      - $ref: '#/components/parameters/NombreRecurso'
+
+    post:
+      tags: [colas]
+      summary: Vaciar una cola sin eliminarla
+      description: >
+        Es un POST sobre un subrecurso y no un DELETE porque la cola sigue existiendo. Responde
+        200 con cuerpo y no 204 porque devuelve cuantos mensajes se eliminaron.
+
+        Pasa por el mismo seguro que eliminar: descartar notificaciones pendientes es igual de
+        destructivo para lo que importa. El caso legitimo habitual, vaciar una DLQ ya analizada,
+        solo necesita forzar=true.
+      operationId: purgarCola
+      parameters:
+        - $ref: '#/components/parameters/Forzar'
+      responses:
+        '200':
+          description: Cola vaciada, con el conteo de mensajes eliminados
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperacionResultado' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/RecursoProtegido' }
+
+  /api/v1/mq/exchanges:
+    get:
+      tags: [exchanges]
+      summary: Listar los exchanges del vhost
+      operationId: listarExchanges
+      responses:
+        '200':
+          description: Exchanges del vhost, ordenados por nombre
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ExchangeResumen' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '503': { $ref: '#/components/responses/GestionNoDisponible' }
+
+    post:
+      tags: [exchanges]
+      summary: Declarar un exchange
+      description: >
+        Declarar dos veces con el mismo tipo y la misma durabilidad es idempotente. Cambiar el
+        tipo de un exchange que ya existe es lo que el broker rechaza con PRECONDITION_FAILED.
+      operationId: crearExchange
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CrearExchangeRequest' }
+      responses:
+        '201':
+          description: Exchange declarado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperacionResultado' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '409': { $ref: '#/components/responses/TopologiaIncompatible' }
+
+  /api/v1/mq/exchanges/{nombre}:
+    parameters:
+      - $ref: '#/components/parameters/NombreRecurso'
+
+    delete:
+      tags: [exchanges]
+      summary: Eliminar un exchange
+      description: >
+        Se eliminan tambien sus bindings; las colas enlazadas siguen existiendo. Lo que ocurre es
+        que las publicaciones contra ese exchange dejan de llegar a ninguna parte.
+      operationId: eliminarExchange
+      parameters:
+        - $ref: '#/components/parameters/Forzar'
+      responses:
+        '204': { description: Exchange eliminado }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/RecursoProtegido' }
+
+  /api/v1/mq/bindings:
+    get:
+      tags: [bindings]
+      summary: Listar los bindings del vhost
+      description: >
+        Incluye los bindings implicitos del exchange por omision, que aparecen con el origen
+        vacio. No se pueden crear ni eliminar, pero se dejan a la vista porque son los que
+        explican que publicar con el nombre de una cola como routing key llegue a esa cola.
+      operationId: listarBindings
+      responses:
+        '200':
+          description: Bindings del vhost
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/BindingResumen' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '503': { $ref: '#/components/responses/GestionNoDisponible' }
+
+    post:
+      tags: [bindings]
+      summary: Declarar un binding
+      description: Repetir la misma tripleta es idempotente y no duplica la regla.
+      operationId: crearBinding
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CrearBindingRequest' }
+      responses:
+        '201':
+          description: Binding declarado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperacionResultado' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404':
+          description: El exchange o el destino no existen
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+    delete:
+      tags: [bindings]
+      summary: Eliminar un binding
+      description: >
+        Un binding no tiene nombre propio: lo identifica la tripleta (exchange, destino, routing
+        key), y de ahi que los tres valores vayan como parametros de consulta en lugar de un
+        identificador en la ruta. Es la unica desviacion del patron /recurso/{nombre} de esta API,
+        y la impone el modelo de AMQP.
+
+        No lleva forzar: un binding borrado se restituye con una sola peticion y no se pierde
+        ningun mensaje ya encolado. Los que se publiquen mientras no existe si se descartan.
+      operationId: eliminarBinding
+      parameters:
+        - name: exchange
+          in: query
+          required: true
+          description: Origen. El exchange por omision (cadena vacia) se rechaza con 400.
+          schema: { type: string }
+        - name: destino
+          in: query
+          required: true
+          schema: { type: string }
+        - name: tipoDestino
+          in: query
+          schema: { $ref: '#/components/schemas/TipoDestino' }
+        - name: routingKey
+          in: query
+          schema: { type: string, default: '' }
+      responses:
+        '204': { description: Binding eliminado }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT de Entra ID. Todas las rutas exigen el App Role Admin.
+
+  parameters:
+    NombreRecurso:
+      name: nombre
+      in: path
+      required: true
+      schema: { type: string, maxLength: 255 }
+
+    Forzar:
+      name: forzar
+      in: query
+      description: >
+        Confirma una operacion destructiva sobre un nombre protegido. Sin el, esos nombres
+        responden 409. No es una prohibicion, es un seguro contra el error de dedo.
+      schema: { type: boolean, default: false }
+
+  schemas:
+
+    CrearColaRequest:
+      type: object
+      required: [nombre]
+      properties:
+        nombre:
+          type: string
+          maxLength: 255
+          description: >
+            El prefijo amq. esta reservado por AMQP y se rechaza con 400. Es importante: Spring
+            AMQP salta en silencio esas declaraciones, asi que sin la validacion la API
+            responderia 201 sobre una cola que nunca se creo.
+          example: q.cmd.pruebas
+        durable:
+          type: boolean
+          default: true
+          description: >
+            Por omision true. Es deliberado: una cola no durable desaparece al reiniciar el
+            broker, y ese no es el valor que debe tomar un campo omitido.
+        exclusiva:
+          type: boolean
+          default: false
+        autoDelete:
+          type: boolean
+          default: false
+        argumentos:
+          type: object
+          additionalProperties: true
+          description: >
+            x-message-ttl, x-max-length, x-dead-letter-exchange, x-queue-type... Se pasan tal cual
+            al broker, que es quien valida nombres y rangos.
+          example:
+            x-message-ttl: 300000
+            x-dead-letter-exchange: cmd.dead.dlx
+            x-dead-letter-routing-key: email.dead
+
+    CrearExchangeRequest:
+      type: object
+      required: [nombre, tipo]
+      properties:
+        nombre: { type: string, maxLength: 255, example: cmd.pruebas }
+        tipo: { $ref: '#/components/schemas/TipoExchange' }
+        durable: { type: boolean, default: true }
+        autoDelete: { type: boolean, default: false }
+        argumentos:
+          type: object
+          additionalProperties: true
+
+    CrearBindingRequest:
+      type: object
+      required: [exchange, destino]
+      properties:
+        exchange:
+          type: string
+          description: Origen de la regla.
+          example: cmd.direct
+        destino:
+          type: string
+          example: q.cmd.email
+        tipoDestino: { $ref: '#/components/schemas/TipoDestino' }
+        routingKey:
+          type: string
+          default: ''
+          description: >
+            No es obligatoria: un binding a un exchange fanout no la usa, y la cadena vacia es un
+            valor legitimo. Si llega ausente se normaliza a cadena vacia.
+          example: email.send
+        argumentos:
+          type: object
+          additionalProperties: true
+          description: Necesarios para un exchange HEADERS, donde la coincidencia va por x-match.
+
+    ColaResumen:
+      type: object
+      description: >
+        Los campos que solo conoce la API de gestion se omiten en la respuesta de
+        GET /queues/{nombre}, que va por AMQP.
+      properties:
+        nombre: { type: string }
+        mensajes: { type: integer }
+        consumidores: { type: integer }
+        durable: { type: boolean }
+        exclusiva: { type: boolean }
+        autoDelete: { type: boolean }
+        argumentos: { type: object, additionalProperties: true }
+        estado: { type: string, example: running }
+        nodo: { type: string, example: rabbit@rabbitmq1 }
+        politica:
+          type: string
+          description: >
+            Politica aplicada, si alguna. Es lo que delata el espejado: ha-colas-cmd se aplica por
+            el patron del NOMBRE de la cola, no por ningun argumento.
+          example: ha-colas-cmd
+        protegida:
+          type: boolean
+          description: El nombre figura en andesstay.mq.protegidos.
+
+    ExchangeResumen:
+      type: object
+      properties:
+        nombre: { type: string }
+        tipo:
+          type: string
+          description: >
+            Texto y no enum porque el broker puede tener exchanges de plugin
+            (x-delayed-message, x-consistent-hash) que esta API no sabe crear pero si debe listar.
+          example: direct
+        durable: { type: boolean }
+        autoDelete: { type: boolean }
+        interno: { type: boolean }
+        argumentos: { type: object, additionalProperties: true }
+        protegido: { type: boolean }
+
+    BindingResumen:
+      type: object
+      properties:
+        exchange:
+          type: string
+          description: Vacio en los bindings implicitos del exchange por omision.
+        destino: { type: string }
+        tipoDestino: { type: string, example: queue }
+        routingKey: { type: string }
+        argumentos: { type: object, additionalProperties: true }
+
+    OperacionResultado:
+      type: object
+      properties:
+        recurso: { type: string, example: cola }
+        nombre: { type: string, example: q.cmd.pruebas }
+        operacion: { type: string, example: declarada }
+        detalle: { type: string }
+        mensajesPurgados:
+          type: integer
+          description: Solo lo rellena la purga.
+
+    TipoExchange:
+      type: string
+      enum: [DIRECT, TOPIC, FANOUT, HEADERS]
+
+    TipoDestino:
+      type: string
+      enum: [QUEUE, EXCHANGE]
+      default: QUEUE
+
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        detalle: { type: string }
+        detalleDelBroker:
+          type: string
+          description: >
+            Texto literal con el que el broker cerro el canal. Se devuelve tal cual porque nombra
+            el argumento concreto que difiere, lo que es mas util que cualquier mensaje propio.
+
+  responses:
+
+    SolicitudInvalida:
+      description: >
+        Cuerpo invalido, nombre con el prefijo reservado amq., o el exchange por omision en una
+        baja de binding.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            validacion:
+              value: { error: VALIDACION, detalle: el cuerpo no es valido, campos: { nombre: el nombre de la cola es obligatorio } }
+            prefijoReservado:
+              value: { error: PETICION_INVALIDA, detalle: 'el prefijo amq. esta reservado por AMQP para los recursos que genera el broker; elige otro nombre' }
+
+    NoAutenticado:
+      description: Falta el token o no es valido.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+    RolInsuficiente:
+      description: Token valido sin el App Role Admin.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: ROL_INSUFICIENTE, detalle: esta operacion exige el rol Admin }
+
+    NoEncontrado:
+      description: El recurso no existe en el vhost.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: RECURSO_NO_ENCONTRADO, detalle: "no existe la cola 'q.no.existe'", recurso: cola, nombre: q.no.existe }
+
+    RecursoProtegido:
+      description: >
+        El nombre pertenece a la topologia de AndesStay y la operacion es destructiva. Se repite
+        con forzar=true si es intencionado.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: RECURSO_PROTEGIDO, detalle: "eliminar 'q.cmd.email' afectaria a la topologia de AndesStay. Si es intencionado, repite la peticion con ?forzar=true", nombre: q.cmd.email }
+
+    TopologiaIncompatible:
+      description: >
+        El recurso ya existe con una definicion distinta. AMQP no permite redefinirlo: el broker
+        responde PRECONDITION_FAILED y cierra el canal.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: TOPOLOGIA_INCOMPATIBLE, detalle: ya existe con una definicion distinta y AMQP no permite redefinirla, detalleDelBroker: "PRECONDITION_FAILED - inequivalent arg 'x-message-ttl' for queue 'q.cmd.email'" }
+
+    BrokerNoDisponible:
+      description: Sin conexion AMQP con RabbitMQ.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: BROKER_NO_DISPONIBLE, detalle: no hay conexion con RabbitMQ }
+
+    GestionNoDisponible:
+      description: >
+        No se alcanzo la API de gestion del broker en el puerto 15672. El listado la necesita
+        porque AMQP no tiene operacion de listado; las altas y las bajas siguen funcionando.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: GESTION_NO_DISPONIBLE, detalle: 'no se alcanzo la API de gestion del broker en el puerto 15672. El listado la necesita: AMQP no tiene operacion de listado.' }

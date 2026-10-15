@@ -87,12 +87,40 @@ server {
     location ~ ^/(staff|guest)/(.*)$ {
         if ($gateway_authorized = 0) { return 403; }
 
+        # $2 captura todo lo que sigue al prefijo, version incluida: /staff/v1/reservations
+        # se reconstruye como /api/v1/reservations. Por eso esta regla NO cambio al
+        # versionar: la version viaja dentro de la captura.
         proxy_pass http://bff_upstream/api/$2$is_args$args;
         include /etc/nginx/snippets/proxy-common.conf;
     }
 
-    # Acceso directo a /api/** — lo usan las pruebas con curl desde la propia
+    # Acceso directo a /api/v1/** — lo usan las pruebas con curl desde la propia
     # instancia y el tramo local de depuración. Exige la misma cabecera.
+    # ── Shim de compatibilidad: /api/** sin version ──────────────────────
+    #
+    # TEMPORAL. Se retira en cuanto no queden llamadores del prefijo sin version.
+    #
+    # Existe por una ventana concreta del despliegue: crear-infra.sh construye las
+    # imagenes en orden y hace exit 1 al primer fallo, y la del frontend es la
+    # ultima. Si esa falla, queda el backend sirviendo /api/v1/** y el bundle de
+    # SPA ya desplegado pidiendo /api/**, es decir la aplicacion caida por una
+    # costura de versionado. Con este bloque, ese estado intermedio funciona.
+    #
+    # Va en nginx y no en el BFF por dos razones. Es un volumen montado, asi que
+    # ponerlo y quitarlo cuesta quince segundos sin recompilar nada. Y duplicar en
+    # el BFF los catorce pathMatchers a veintiocho es exactamente donde se esconde
+    # un agujero de autorizacion: bastaria olvidar el denyAll de
+    # /api/catalog/internal/** en el prefijo legado para abrir al exterior las
+    # rutas internas del catalogo.
+    #
+    # El (?!v1/) evita que /api/v1/x entre aqui y se reescriba a /api/v1/v1/x.
+    location ~ ^/api/(?!v1/)(.*)$ {
+        if ($gateway_authorized = 0) { return 403; }
+
+        proxy_pass http://bff_upstream/api/v1/$1$is_args$args;
+        include /etc/nginx/snippets/proxy-common.conf;
+    }
+
     location /api/ {
         if ($gateway_authorized = 0) { return 403; }
 
@@ -171,7 +199,19 @@ server {
     location ~ ^/(staff|guest)/(.*)$ {
         if ($gateway_authorized = 0) { return 403; }
 
+        # $2 captura todo lo que sigue al prefijo, version incluida: /staff/v1/reservations
+        # se reconstruye como /api/v1/reservations. Por eso esta regla NO cambio al
+        # versionar: la version viaja dentro de la captura.
         proxy_pass http://bff_upstream/api/$2$is_args$args;
+        include /etc/nginx/snippets/proxy-common.conf;
+    }
+
+    # Shim de compatibilidad del prefijo sin version. TEMPORAL; el motivo y las
+    # condiciones de retirada estan en el bloque equivalente del server :80.
+    location ~ ^/api/(?!v1/)(.*)$ {
+        if ($gateway_authorized = 0) { return 403; }
+
+        proxy_pass http://bff_upstream/api/v1/$1$is_args$args;
         include /etc/nginx/snippets/proxy-common.conf;
     }
 

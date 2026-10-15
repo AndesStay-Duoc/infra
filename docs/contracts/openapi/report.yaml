@@ -20,7 +20,7 @@ tags:
   - name: kpis
 
 paths:
-  /api/report/kpis:
+  /api/v1/report/kpis:
     get:
       tags: [kpis]
       summary: KPIs de operacion
@@ -46,7 +46,7 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/RolInsuficiente' }
 
-  /api/report/top-units:
+  /api/v1/report/top-units:
     get:
       tags: [kpis]
       summary: Unidades mas demandadas
