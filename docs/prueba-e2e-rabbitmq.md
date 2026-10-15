@@ -41,7 +41,7 @@ revisión:
 
 | Repositorio | Rama | Qué depende de ella |
 |---|---|---|
-| `ms-andesstay-mq` | `feat/mq-proteccion-y-validacion` | Pasos 4.3 a 4.5: la protección de bindings, que `forzar=true` no la levante, la validación de formato y `GET /exchanges/{nombre}`. Con `develop`, `forzar=true` sí borra una cola protegida y los bindings no están protegidos |
+| `ms-andesstay-mq` | `feat/mq-proteccion-y-validacion` (PR #2) | Pasos 4.2 a 4.5: la protección de bindings, que `forzar=true` no la levante, la validación de formato, `GET /exchanges/{nombre}` y el `404` al borrar algo inexistente. Con `develop`, `forzar=true` sí borra una cola protegida, los bindings no están protegidos y esas bajas responden `204` |
 | `ms-andesstay-notify` | `feat/notify-centraliza-y-separa`, que incluye `feat/notify-seguridad-jwt` | Paso 6.3: que `/actuator/metrics` exija el rol Admin |
 | `ms-andesstay-reservations` | `develop` más dos arreglos locales que no tocan RabbitMQ (eventos Kafka y reservas por correo) | Nada de esta guía |
 | `ms-andesstay-catalog` | `develop` | — |
@@ -321,7 +321,7 @@ curl -s -w " [HTTP %{http_code}]\n" $API/exchanges/ex.no.existe -H "Authorizatio
 ```
 {"nombre":"ex.demo","tipo":"topic","durable":true,"autoDelete":false,"interno":false,"argumentos":{},"protegido":false}
 {"nombre":"q.demo.email","mensajes":0,"consumidores":0,"protegida":false}
-{"error":"RECURSO_NO_ENCONTRADO","detalle":"no existe la exchange 'ex.no.existe'","recurso":"exchange","nombre":"ex.no.existe"} [HTTP 404]
+{"error":"RECURSO_NO_ENCONTRADO","detalle":"no existe el exchange 'ex.no.existe'","recurso":"exchange","nombre":"ex.no.existe"} [HTTP 404]
 ```
 
 La consulta de una cola va por AMQP y solo trae mensajes y consumidores; el listado
@@ -351,23 +351,33 @@ Los cinco responden `409`:
 {"error":"RECURSO_PROTEGIDO","detalle":"No se permite purgar la cola 'q.cmd.email.dlq': …","nombre":"q.cmd.email.dlq"}
 {"error":"RECURSO_PROTEGIDO","detalle":"No se permite eliminar el exchange 'cmd.dead.dlx': …","nombre":"cmd.dead.dlx"}
 {"error":"RECURSO_PROTEGIDO","detalle":"No se permite crear un binding hacia la cola 'q.cmd.email': …","nombre":"q.cmd.email"}
-{"error":"RECURSO_PROTEGIDO","detalle":"No se permite eliminar un binding desde el exchange 'cmd.direct': …","nombre":"cmd.direct"}
+{"error":"RECURSO_PROTEGIDO","detalle":"No se permite eliminar el binding del sistema 'cmd.direct -> q.cmd.email': …","nombre":"q.cmd.email"}
 ```
 
-Sí se permite crear un binding **desde** un exchange del sistema hacia una cola nueva, porque solo
-agrega una copia de los mensajes:
+También se permite crear y quitar un binding **desde** un exchange del sistema hacia una cola que
+no es del sistema, porque solo agrega una copia de los mensajes. La segunda baja comprueba que el
+binding ya no existe:
 
 ```bash
 curl -s -w " [HTTP %{http_code}]\n" -X POST $API/bindings -H "Authorization: Bearer $TOKEN" -H "$H" \
   -d '{"exchange":"cmd.topic","destino":"q.demo.email","routingKey":"email.*"}'
+curl -s -w " [HTTP %{http_code}]\n" -X DELETE "$API/bindings?exchange=cmd.topic&destino=q.demo.email&routingKey=email.*" -H "Authorization: Bearer $TOKEN"
+curl -s -w " [HTTP %{http_code}]\n" -X DELETE "$API/bindings?exchange=cmd.topic&destino=q.demo.email&routingKey=email.*" -H "Authorization: Bearer $TOKEN"
 ```
 
 ```
 {"recurso":"binding","nombre":"cmd.topic -> q.demo.email (rk=email.*)","operacion":"declarado","detalle":"declarado"} [HTTP 201]
+ [HTTP 204]
+{"error":"RECURSO_NO_ENCONTRADO","detalle":"no existe el binding 'cmd.topic -> q.demo.email (rk=email.*)'","recurso":"binding","nombre":"cmd.topic -> q.demo.email (rk=email.*)"} [HTTP 404]
 ```
 
-Pero ese binding **no se puede quitar por la API**, porque sale de un exchange protegido (responde
-`409` como el último de arriba). Desaparece al eliminar `q.demo.email` en el paso 4.5.
+Lo mismo vale para colas y exchanges: un `DELETE` sobre algo que no existe responde `404`. RabbitMQ
+3.13 trata esas bajas como idempotentes, así que `mq` comprueba antes de borrar.
+
+> Estas tres respuestas, y las de esta sección con el binding del sistema, se verificaron contra
+> RabbitMQ 3.13 levantando solo los dos nodos y `mq`, con la versión final de la rama
+> `feat/mq-proteccion-y-validacion`. El resto del paso 4 se ejecutó con todo el entorno, con la
+> versión anterior de esa rama, que respondía igual en esos casos.
 
 Al terminar el paso siguen los nueve bindings del sistema:
 
@@ -446,12 +456,7 @@ El `#` de la routing key va como `%23`. Eliminar una cola **no pide confirmació
 mensajes**: solo las protegidas se rechazan.
 
 Al final, en *Queues* quedan solo las nueve `q.cmd.*`, y los nueve bindings del sistema siguen
-intactos. En la verificación también desapareció con la cola el binding `cmd.topic -> q.demo.email`
-del paso 4.3.
-
-> **Ojo con el `404` de una baja.** Un `DELETE` sobre una cola o un exchange que **no existe**
-> responde `204`, no `404`: RabbitMQ 3.13 trata `queue.delete` y `exchange.delete` como
-> idempotentes. La purga y las consultas de algo inexistente sí responden `404`. Ver *Hallazgos*.
+intactos.
 
 ---
 
@@ -714,8 +719,8 @@ mantienen lo de la prueba anterior, y los `id` del paso 5 ya no empiezan desde c
 | 4 | **"intentos" en el log de la DLQ** mostraba el `count` de `x-death`, que no cuenta los intentos de entrega. | **Resuelto** en `develop` de notify: el log muestra `intentosConsumidos`, 0 en un error permanente y 3 al agotar los reintentos |
 | 5 | **`apps/compose.yml` está desactualizado**: apunta a Oracle y exige la red de Kafka. | Sin cambios; esta guía usa `mq/compose.yml` y el overlay |
 | 6 | **Tildes en `curl -d` desde Git Bash** se envían mal codificadas (`400 Invalid UTF-8 middle byte`). | Documentado en *Requisitos* |
-| 7 | **El `DELETE` de una cola o un exchange inexistentes responde `204`** y no el `404` que documenta `ms-andesstay-mq`: RabbitMQ 3.13 trata las dos bajas como idempotentes y `deleteQueue` devuelve `true`. | **Pendiente**, en `ms-andesstay-mq`: decidir si se acepta así (es idempotente) o se consulta antes de borrar. Ocurre igual en `develop` |
-| 8 | **El mensaje del 404 de un exchange** dice "no existe **la** exchange". | Cosmético, en `ms-andesstay-mq` (`RecursoNoEncontradoException`) |
+| 7 | **El `DELETE` de una cola o un exchange inexistentes respondía `204`** y no `404`: RabbitMQ 3.13 trata las bajas como idempotentes y `deleteQueue` devolvía `true`. | **Resuelto** en el PR #2 de `ms-andesstay-mq`: colas, exchanges y bindings se comprueban antes de borrar y responden `404`. En `develop` sigue respondiendo `204` |
+| 8 | **El mensaje del 404 de un exchange** decía "no existe **la** exchange". | **Resuelto** en el PR #2 de `ms-andesstay-mq` |
 
 ---
 
