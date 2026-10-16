@@ -272,9 +272,17 @@ services:
         condition: service_healthy
     networks:
       - andesstay-mq
-    # No publica el 8085. GET /api/v1/notify/status y /actuator/metrics existen para la evidencia y
-    # exigen un JWT con el rol Admin; aun así, su superficie HTTP solo debe ser alcanzable desde
-    # dentro de la instancia. /actuator/health queda abierto para el healthcheck de abajo.
+    ports:
+      # Publicado SOLO en loopback, igual que la consola del broker y que ms-andesstay-mq, y por
+      # el mismo motivo: GET /api/v1/notify/status y /actuator/metrics exigen un JWT con rol Admin,
+      # pero el token no debe ser la única capa. Atado a 127.0.0.1 el puerto no es alcanzable desde
+      # la red ni abriendo el grupo de seguridad; se llega por túnel SSH.
+      #
+      # Antes no se publicaba en absoluto, lo que dejaba el estado de las colas accesible solo
+      # desde dentro de la red de Docker. Eso impedía consultarlo desde Postman, que es lo que la
+      # guía de demostración necesita, y obligaba a apuntar el túnel a la IP del contenedor: un
+      # valor que cambia cada vez que se recrean los contenedores.
+      - "127.0.0.1:8085:8085"
     mem_limit: 384m
     healthcheck:
       # Aquí el health indicator de RabbitMQ sí está habilitado: si notify no alcanza el
