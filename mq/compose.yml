@@ -2,6 +2,9 @@
 # AndesStay — RabbitMQ, el consumidor de notificaciones y la API de administración
 #
 # Clúster de 2 nodos, como pide el caso, más ms-andesstay-notify y ms-andesstay-mq.
+#
+# Para probar el flujo completo, con reservations, catalog, MySQL y un SMTP de prueba, se suma
+# el overlay compose.e2e.yml. Ver docs/prueba-e2e-rabbitmq.md.
 # En la nube este compose corre en la instancia ec2-mq (t3.small, 2 GB).
 #
 # POR QUÉ t3.small Y NO t3.micro. Con cuatro contenedores no cabe en 1 GB: los dos nodos del
@@ -48,12 +51,24 @@ x-rabbit-env: &rabbit-env
 # El ping solo comprueba el nodo Erlang y da healthy ANTES de que la API de gestión escuche
 # en el 15672. Por eso se comprueban las dos cosas: rabbitmq-init llama a esa API y, con el
 # ping a secas, se encontraba el puerto cerrado.
+#
+# start_period de 240 s, no 40 s: en el PRIMER arranque, con el volumen vacío, rabbitmq1 pasa unos
+# tres minutos intentando descubrir a rabbitmq2 (classic_config los declara a los dos) antes de
+# arrancar solo. Pero rabbitmq2 no se crea hasta que rabbitmq1 está healthy, así que esa espera
+# siempre se cumple entera. Con 40 s + 10 reintentos de 15 s, compose lo declaraba unhealthy
+# segundos antes de que terminara de arrancar y todo lo que depende de él fallaba. Verificado el
+# 2026-10-11: "could not discover and join another node; proceeding as a standalone node" a los
+# 3 min 4 s. En los arranques siguientes el nodo ya no es virgen y no hay espera.
+#
+# Desde que rabbitmq2 depende de rabbitmq1 con service_started (ver rabbitmq2), los dos arrancan a
+# la vez y esa espera de tres minutos ya no debería ocurrir. El margen se mantiene como red de
+# seguridad: un start_period largo solo retrasa cuándo cuentan los fallos, no el arranque.
 x-rabbit-health: &rabbit-health
   test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_port_connectivity"]
   interval: 15s
   timeout: 15s
   retries: 10
-  start_period: 40s
+  start_period: 240s
 
 services:
 
@@ -245,6 +260,9 @@ services:
       SPRING_MAIL_PROPERTIES_MAIL_SMTP_CONNECTIONTIMEOUT: "${MAIL_TIMEOUT_MS:-5000}"
       SPRING_MAIL_PROPERTIES_MAIL_SMTP_TIMEOUT: "${MAIL_TIMEOUT_MS:-5000}"
       SPRING_MAIL_PROPERTIES_MAIL_SMTP_WRITETIMEOUT: "${MAIL_TIMEOUT_MS:-5000}"
+      # Validan el JWT de /api/v1/notify/status y /actuator/metrics, que exigen el rol Admin.
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-055d11d1-8ae0-4221-a6f7-b50be0a623b4}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-704a544f-3d92-44f5-aef9-8559574cff34}
     depends_on:
       rabbitmq1:
         condition: service_healthy
@@ -254,9 +272,9 @@ services:
         condition: service_healthy
     networks:
       - andesstay-mq
-    # No publica el 8085. GET /api/v1/notify/status existe para la evidencia, pero este
-    # servicio no tiene starter de security, así que su superficie HTTP solo debe ser
-    # alcanzable desde dentro de la instancia.
+    # No publica el 8085. GET /api/v1/notify/status y /actuator/metrics existen para la evidencia y
+    # exigen un JWT con el rol Admin; aun así, su superficie HTTP solo debe ser alcanzable desde
+    # dentro de la instancia. /actuator/health queda abierto para el healthcheck de abajo.
     mem_limit: 384m
     healthcheck:
       # Aquí el health indicator de RabbitMQ sí está habilitado: si notify no alcanza el

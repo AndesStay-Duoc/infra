@@ -1,0 +1,134 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AndesStay — overlay para la prueba de punta a punta de RabbitMQ
+#
+# Se suma a compose.yml y agrega lo que hace falta para que un mensaje nazca en
+# ms-andesstay-reservations y termine en ms-andesstay-notify:
+#
+#   mysql         la base que usan catalog y reservations
+#   catalog       reservations le consulta la unidad antes de crear una reserva
+#   reservations  el publicador, con la publicación a RabbitMQ ACTIVADA
+#   mailpit       un servidor SMTP de prueba con bandeja web, para que notify
+#                 pueda enviar correos sin una cuenta real
+#
+# SOLO PARA PRUEBAS LOCALES. No forma parte de ningún despliegue: el de AWS es
+# infra/deploy/compose.yml. La guía completa está en docs/prueba-e2e-rabbitmq.md.
+#
+# Uso, desde la carpeta raíz donde están clonados los repositorios:
+#   docker compose --env-file infra/.env -f infra/mq/compose.yml -f infra/mq/compose.e2e.yml up -d --build
+#
+# Las variables MYSQL_*, MAIL_* y RABBITMQ_* salen del mismo infra/.env; ver
+# infra/.env.example.
+# ─────────────────────────────────────────────────────────────────────────────
+
+volumes:
+  mysql-e2e-data:
+
+# Las mismas opciones que usan los servicios en infra/deploy/compose.yml.
+x-jvm: &jvm-opts
+  JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70 -XX:+UseSerialGC -Xss512k"
+
+x-azure: &azure-env
+  AZURE_TENANT_ID: ${AZURE_TENANT_ID:-055d11d1-8ae0-4221-a6f7-b50be0a623b4}
+  AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-704a544f-3d92-44f5-aef9-8559574cff34}
+
+x-datasource: &datasource-env
+  SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8
+  SPRING_DATASOURCE_USERNAME: ${MYSQL_APP_USER}
+  SPRING_DATASOURCE_PASSWORD: ${MYSQL_APP_PASSWORD}
+
+services:
+
+  mysql:
+    image: mysql:8.0
+    container_name: andesstay-e2e-mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+00:00
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_APP_USER}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD}
+    volumes:
+      - mysql-e2e-data:/var/lib/mysql
+      # El mismo script de inicialización que el despliegue: juego de caracteres y permisos.
+      - ../deploy/mysql/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - andesstay-mq
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root --password=$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  catalog:
+    build:
+      context: ../../ms-andesstay-catalog
+    container_name: andesstay-e2e-catalog
+    environment:
+      <<: [*jvm-opts, *azure-env, *datasource-env]
+    depends_on:
+      mysql: {condition: service_healthy}
+    networks:
+      - andesstay-mq
+    ports:
+      - "127.0.0.1:8082:8082"
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/actuator/health | grep -q UP"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
+  reservations:
+    build:
+      context: ../../ms-andesstay-reservations
+    container_name: andesstay-e2e-reservations
+    environment:
+      <<: [*jvm-opts, *azure-env, *datasource-env]
+      CATALOG_BASE_URL: http://catalog:8082
+      RABBITMQ_HOST: rabbitmq1
+      RABBITMQ_PORT: 5672
+      RABBITMQ_VHOST: andesstay
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASS: ${RABBITMQ_PASSWORD}
+      # Al revés que en infra/deploy/compose.yml: aquí el broker sí existe, así que la
+      # publicación a RabbitMQ se activa. Kafka sigue apagado porque este entorno no lo trae.
+      ANDESSTAY_EVENTS_RABBIT_ENABLED: "true"
+      ANDESSTAY_EVENTS_KAFKA_ENABLED: "false"
+    depends_on:
+      mysql: {condition: service_healthy}
+      catalog: {condition: service_healthy}
+      rabbitmq1: {condition: service_healthy}
+      # notify declara las colas y los bindings al arrancar. Si reservations publicara antes, el
+      # broker devolvería los mensajes como no enrutables.
+      notify: {condition: service_healthy}
+    networks:
+      - andesstay-mq
+    ports:
+      - "127.0.0.1:8081:8081"
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8081/actuator/health | grep -q UP"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
+  # SMTP de prueba con bandeja web en http://localhost:8025. Acepta cualquier usuario y
+  # contraseña, porque notify siempre se autentica (mail.smtp.auth: true).
+  mailpit:
+    image: axllent/mailpit:v1.21
+    container_name: andesstay-e2e-mailpit
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    networks:
+      - andesstay-mq
+    ports:
+      - "127.0.0.1:8025:8025"
+    mem_limit: 64m
