@@ -1,8 +1,8 @@
 {
   "info": {
     "_postman_id": "a9d3c1e0-7b42-4f58-9c10-2f6a8d4e5b31",
-    "name": "AndesStay · Evidencia de códigos de respuesta",
-    "description": "Batería completa de pruebas por ruta y por rol, con asercion del código HTTP y del cuerpo de error.\n\nCubre 200, 201, 204, 400, 401, 403, 404 y 409.\n\n## Antes de ejecutar\n\n1. Importar también `entorno-postman.json` y seleccionarlo.\n2. Rellenar los cinco tokens. Se obtienen iniciando sesión en la SPA con cada usuario y copiando el access token desde las herramientas de desarrollo: pestaña Aplicación, Almacenamiento local, clave que contiene `accesstoken`, campo `secret`. Duran una hora.\n3. `tokenSinRol` es el de un usuario autoregistrado al que NO se le asignó ningún App Role.\n\n## Cómo se ejecuta\n\nCon el Runner de Postman sobre la colección completa, o por consola:\n\n    newman run coleccion-postman.json -e entorno-postman.json --reporters cli,html\n\nEl orden importa: la carpeta 4 crea la reserva que usan la 5 y la 6.\n\n## Qué NO cubre\n\nLas carpetas 8 y 9 solo tienen sentido contra el despliegue en AWS. En local fallan a propósito, porque no hay gateway ni nginx.",
+    "name": "AndesStay · Códigos de respuesta y contrato /api/v1",
+    "description": "Colección de evidencia de la API de AndesStay, versionada en /api/v1.\n\nLas carpetas 0 a 9 se verificaron contra el entorno desplegado; las carpetas 10 y 11 necesitan túnel SSH porque mq y notify se publican solo en el loopback de ec2-mq. La carpeta 12 documenta un defecto abierto.\n\nLOS TOKENS NO VIENEN EN EL FICHERO. El repositorio es público: pega el tuyo en las variables del entorno, que Postman marca como secretas y no exporta.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "event": [
@@ -11,15 +11,58 @@
       "script": {
         "type": "text/javascript",
         "exec": [
-          "// Fechas siempre futuras, para que la colección se pueda correr cualquier día sin editarla.",
-          "// Se usa un desplazamiento distinto en cada ejecución para no chocar con reservas anteriores.",
+          "// ─── Prerrequisitos ──────────────────────────────────────────────────────────",
+          "// Salta la peticion cuando le falta algo para ejecutarse, en lugar de dejarla fallar. Un fallo",
+          "// significa \"la API se comporta mal\"; una peticion sin token no dice eso, dice que la comprobacion",
+          "// no llego a correr. Mezclarlas hace que 42 rojos previsibles tapen el unico rojo que importaria.",
+          "(() => {",
+          "  // En el script PREVIO las variables todavia no estan sustituidas: la cabecera llega como",
+          "  // \"Bearer {{tokenAdmin}}\" tal cual. Hay que resolverlas a mano. pm.variables.get consulta",
+          "  // entorno, coleccion y globales con la misma precedencia que aplicara el runner despues.",
+          "  const resolver = (texto) => String(texto == null ? '' : texto)",
+          "    .replace(/\\{\\{(\\w+)\\}\\}/g, (_, clave) => {",
+          "      const v = pm.variables.get(clave);",
+          "      return v == null ? '' : String(v);",
+          "    });",
+          "",
+          "  const saltar = (motivo) => {",
+          "    const n = Number(pm.collectionVariables.get('saltadas') || 0) + 1;",
+          "    pm.collectionVariables.set('saltadas', n);",
+          "    console.warn('SALTADA · ' + pm.info.requestName + ' · ' + motivo);",
+          "    pm.execution.skipRequest();",
+          "  };",
+          "",
+          "  // 1. Token ausente. Resuelta la plantilla, una cabecera que queda en \"Bearer\" a secas delata",
+          "  //    que su variable estaba vacia, sea cual sea el rol.",
+          "  const auth = pm.request.headers.get('Authorization');",
+          "  if (auth != null && /^Bearer\\s*$/.test(resolver(auth))) {",
+          "    return saltar('falta el token de su rol en el entorno');",
+          "  }",
+          "",
+          "  // 2. Destino que solo existe a traves del tunel SSH. Se exige una senal explicita en lugar de",
+          "  //    sondear la conexion: un intento fallido costaria el timeout completo en cada peticion.",
+          "  if (/localhost|127\\.0\\.0\\.1/.test(resolver(pm.request.url.toString()))",
+          "      && pm.variables.get('tunelAbierto') !== 'si') {",
+          "    return saltar('necesita el tunel SSH; pon tunelAbierto=si en el entorno cuando lo abras');",
+          "  }",
+          "})();",
+          "// Las fechas se calculan en cada ejecucion. Una fecha escrita a mano en el entorno funciona",
+          "// hoy y devuelve 400 cuando pasa: el backend rechaza una entrada anterior a hoy.",
+          "//",
+          "// Solo se fijan si estan vacias, para poder forzarlas a mano al reproducir un caso.",
+          "const dia = 24 * 60 * 60 * 1000;",
+          "const iso = (d) => d.toISOString().slice(0, 10);",
           "if (!pm.collectionVariables.get('fechaEntrada')) {",
-          "  const offset = 30 + Math.floor(Math.random() * 300);",
-          "  const entrada = new Date(Date.now() + offset * 86400000);",
-          "  const salida = new Date(entrada.getTime() + 3 * 86400000);",
-          "  const iso = d => d.toISOString().slice(0, 10);",
-          "  pm.collectionVariables.set('fechaEntrada', iso(entrada));",
-          "  pm.collectionVariables.set('fechaSalida', iso(salida));",
+          "  pm.collectionVariables.set('fechaEntrada', iso(new Date(Date.now() + 7 * dia)));",
+          "}",
+          "if (!pm.collectionVariables.get('fechaSalida')) {",
+          "  pm.collectionVariables.set('fechaSalida', iso(new Date(Date.now() + 9 * dia)));",
+          "}",
+          "",
+          "// Aviso temprano y claro: sin token, media coleccion devuelve 401 y parece que la API esta",
+          "// rota cuando lo que falta es la preparacion.",
+          "if (!pm.environment.get('tokenAdmin')) {",
+          "  console.warn('Falta tokenAdmin en el entorno: las peticiones autenticadas daran 401.');",
           "}"
         ]
       }
@@ -30,7 +73,17 @@
         "type": "text/javascript",
         "exec": [
           "// Comprobación transversal: ninguna respuesta debería tardar más de 5 s.",
-          "pm.test('Responde en menos de 5 s', () => pm.expect(pm.response.responseTime).to.be.below(5000));"
+          "pm.test('Responde en menos de 5 s', () => pm.expect(pm.response.responseTime).to.be.below(5000));",
+          "",
+          "// ─── Resumen de saltos ───────────────────────────────────────────────────────",
+          "// Sin esto, una ejecucion con 42 peticiones saltadas se lee igual que una donde todo paso.",
+          "(() => {",
+          "  const n = Number(pm.collectionVariables.get('saltadas') || 0);",
+          "  if (n > 0) {",
+          "    console.warn('Peticiones saltadas por falta de prerrequisito: ' + n",
+          "      + '. Revisa los avisos SALTADA de arriba.');",
+          "  }",
+          "})();"
         ]
       }
     }
@@ -62,21 +115,21 @@
       "name": "0 · Salud (sin autenticación)",
       "item": [
         {
-          "name": "200 · GET /actuator/health del BFF",
+          "name": "El actuator NO se expone fuera de la instancia",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{bffUrl}}/actuator/health",
+              "raw": "{{nginxUrl}}/actuator/health",
               "host": [
-                "{{bffUrl}}"
+                "{{nginxUrl}}"
               ],
               "path": [
                 "actuator",
                 "health"
               ]
             },
-            "description": "El health check es público a propósito: lo usa el healthcheck del contenedor, que no tiene token."
+            "description": "Comprueba que /actuator/health no es alcanzable desde internet, que es la propiedad que importa: el actuator publica detalle de configuración y estado interno.\n\nNo está declarado como ruta del API Gateway --por ahí responde 404-- y nginx tampoco lo proxya: cae en el fallback de la SPA y devuelve index.html con 200. Ese 200 engaña si uno mira solo el código, así que la comprobación es sobre el CUERPO.\n\nLa evidencia de que los servicios están sanos no sale de aquí sino del healthcheck de cada contenedor, que consulta el actuator por dentro de la red de Docker."
           },
           "event": [
             {
@@ -84,8 +137,14 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('200', () => pm.response.to.have.status(200));",
-                  "pm.test('status UP', () => pm.expect(pm.response.json().status).to.eql('UP'));"
+                  "pm.test('no devuelve un documento de salud', () => {",
+                  "  const t = pm.response.text();",
+                  "  pm.expect(t, 'el actuator esta expuesto a internet').to.not.match(/\"status\"\\s*:\\s*\"UP\"/);",
+                  "});",
+                  "",
+                  "pm.test('cae en el fallback de la SPA, no en el actuator', () => {",
+                  "  pm.expect(pm.response.text()).to.match(/<!doctype html>/i);",
+                  "});"
                 ]
               }
             }
@@ -98,17 +157,18 @@
       "description": "El 401 lo emite el BFF antes de mirar el rol. La diferencia con el 403 importa: 401 es 'no sé quién eres', 403 es 'sé quién eres y no te alcanza'.",
       "item": [
         {
-          "name": "401 · GET /api/me",
+          "name": "401 · GET /api/v1/me",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{bffUrl}}/api/me",
+              "raw": "{{bffUrl}}/api/v1/me",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "me"
               ]
             }
@@ -127,17 +187,18 @@
           ]
         },
         {
-          "name": "401 · GET /api/reservations",
+          "name": "401 · GET /api/v1/reservations",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{bffUrl}}/api/reservations",
+              "raw": "{{bffUrl}}/api/v1/reservations",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations"
               ]
             }
@@ -155,7 +216,7 @@
           ]
         },
         {
-          "name": "401 · POST /api/reservations",
+          "name": "401 · POST /api/v1/reservations",
           "request": {
             "method": "POST",
             "header": [
@@ -169,12 +230,13 @@
               "raw": "{\"unitId\":1,\"checkIn\":\"{{fechaEntrada}}\",\"checkOut\":\"{{fechaSalida}}\",\"huespedes\":2,\"guestId\":\"x\",\"guestEmail\":\"x@example.cl\"}"
             },
             "url": {
-              "raw": "{{bffUrl}}/api/reservations",
+              "raw": "{{bffUrl}}/api/v1/reservations",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations"
               ]
             }
@@ -192,17 +254,18 @@
           ]
         },
         {
-          "name": "401 · GET /api/catalog/units",
+          "name": "401 · GET /api/v1/catalog/units",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{bffUrl}}/api/catalog/units",
+              "raw": "{{bffUrl}}/api/v1/catalog/units",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "catalog",
                 "units"
               ]
@@ -221,17 +284,18 @@
           ]
         },
         {
-          "name": "401 · GET /api/report/kpis",
+          "name": "401 · GET /api/v1/report/kpis",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{bffUrl}}/api/report/kpis",
+              "raw": "{{bffUrl}}/api/v1/report/kpis",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "report",
                 "kpis"
               ]
@@ -250,17 +314,18 @@
           ]
         },
         {
-          "name": "401 · GET /api/audit/events",
+          "name": "401 · GET /api/v1/audit/events",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{bffUrl}}/api/audit/events",
+              "raw": "{{bffUrl}}/api/v1/audit/events",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "audit",
                 "events"
               ]
@@ -289,12 +354,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/me",
+              "raw": "{{bffUrl}}/api/v1/me",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "me"
               ]
             },
@@ -319,7 +385,7 @@
       "name": "2 · Identidad",
       "item": [
         {
-          "name": "200 · GET /api/me como Admin",
+          "name": "200 · GET /api/v1/me como Admin",
           "request": {
             "method": "GET",
             "header": [
@@ -329,12 +395,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/me",
+              "raw": "{{bffUrl}}/api/v1/me",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "me"
               ]
             }
@@ -348,14 +415,21 @@
                   "pm.test('200', () => pm.response.to.have.status(200));",
                   "const b = pm.response.json();",
                   "pm.test('Trae effectiveRoles', () => pm.expect(b.effectiveRoles).to.be.an('array').that.is.not.empty);",
-                  "pm.test('El rol es Admin', () => pm.expect(b.effectiveRoles).to.include('Admin'));"
+                  "pm.test('El rol es Admin', () => pm.expect(b.effectiveRoles).to.include('Admin'));",
+                  "",
+                  "// El sub del token es el actorId que usa auditoria. Se guarda aqui para que las peticiones",
+                  "// que lo necesitan no obliguen a copiarlo del token a mano.",
+                  "const cuerpo = pm.response.json();",
+                  "if (cuerpo && cuerpo.sub) {",
+                  "  pm.environment.set('actorId', cuerpo.sub);",
+                  "}"
                 ]
               }
             }
           ]
         },
         {
-          "name": "200 · GET /api/me como Cliente",
+          "name": "200 · GET /api/v1/me como Cliente",
           "request": {
             "method": "GET",
             "header": [
@@ -365,12 +439,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/me",
+              "raw": "{{bffUrl}}/api/v1/me",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "me"
               ]
             }
@@ -389,7 +464,7 @@
           ]
         },
         {
-          "name": "403 · GET /api/me con token sin rol ni scope",
+          "name": "403 · GET /api/v1/me con token sin rol ni scope",
           "request": {
             "method": "GET",
             "header": [
@@ -399,12 +474,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/me",
+              "raw": "{{bffUrl}}/api/v1/me",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "me"
               ]
             },
@@ -439,12 +515,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/catalog/units",
+              "raw": "{{bffUrl}}/api/v1/catalog/units",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "catalog",
                 "units"
               ]
@@ -476,12 +553,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/catalog/units",
+              "raw": "{{bffUrl}}/api/v1/catalog/units",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "catalog",
                 "units"
               ]
@@ -511,12 +589,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/catalog/units",
+              "raw": "{{bffUrl}}/api/v1/catalog/units",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "catalog",
                 "units"
               ]
@@ -545,12 +624,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/catalog/units?from={{fechaEntrada}}&to={{fechaSalida}}&huespedes=2",
+              "raw": "{{bffUrl}}/api/v1/catalog/units?from={{fechaEntrada}}&to={{fechaSalida}}&huespedes=2",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "catalog",
                 "units"
               ],
@@ -595,12 +675,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/catalog/units?from={{fechaEntrada}}",
+              "raw": "{{bffUrl}}/api/v1/catalog/units?from={{fechaEntrada}}",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "catalog",
                 "units"
               ],
@@ -644,12 +725,13 @@
               "raw": "{\n  \"name\": \"Cabana de prueba Postman\",\n  \"type\": \"CABANA\",\n  \"capacity\": 4,\n  \"pricePerNight\": 50000,\n  \"availableSlots\": 2,\n  \"description\": \"Creada por la bateria de evidencia\",\n  \"active\": true\n}"
             },
             "url": {
-              "raw": "{{bffUrl}}/api/catalog/units",
+              "raw": "{{bffUrl}}/api/v1/catalog/units",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "catalog",
                 "units"
               ]
@@ -688,12 +770,13 @@
               "raw": "{\"name\":\"No deberia crearse\",\"type\":\"CABANA\",\"capacity\":2,\"pricePerNight\":1000,\"availableSlots\":1,\"active\":true}"
             },
             "url": {
-              "raw": "{{bffUrl}}/api/catalog/units",
+              "raw": "{{bffUrl}}/api/v1/catalog/units",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "catalog",
                 "units"
               ]
@@ -730,7 +813,19 @@
               "mode": "raw",
               "raw": "{\n  \"type\": \"CABANA\",\n  \"capacity\": 4\n}"
             },
-            "description": "Faltan name, pricePerNight y availableSlots, que son obligatorios."
+            "description": "Faltan name, pricePerNight y availableSlots, que son obligatorios.",
+            "url": {
+              "raw": "{{bffUrl}}/api/v1/catalog/units",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "catalog",
+                "units"
+              ]
+            }
           },
           "event": [
             {
@@ -755,12 +850,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/catalog/units/{{unidadCreadaId}}",
+              "raw": "{{bffUrl}}/api/v1/catalog/units/{{unidadCreadaId}}",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "catalog",
                 "units",
                 "{{unidadCreadaId}}"
@@ -790,12 +886,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/catalog/units/999999",
+              "raw": "{{bffUrl}}/api/v1/catalog/units/999999",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "catalog",
                 "units",
                 "999999"
@@ -826,12 +923,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/catalog/units/{{unitId}}/availability?from={{fechaEntrada}}&to={{fechaSalida}}",
+              "raw": "{{bffUrl}}/api/v1/catalog/units/{{unitId}}/availability?from={{fechaEntrada}}&to={{fechaSalida}}",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "catalog",
                 "units",
                 "{{unitId}}",
@@ -874,12 +972,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/catalog/units/{{unidadCreadaId}}",
+              "raw": "{{bffUrl}}/api/v1/catalog/units/{{unidadCreadaId}}",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "catalog",
                 "units",
                 "{{unidadCreadaId}}"
@@ -925,12 +1024,13 @@
               "raw": "{\n  \"unitId\": {{unitId}},\n  \"checkIn\": \"{{fechaEntrada}}\",\n  \"checkOut\": \"{{fechaSalida}}\",\n  \"huespedes\": 2\n}"
             },
             "url": {
-              "raw": "{{bffUrl}}/api/reservations",
+              "raw": "{{bffUrl}}/api/v1/reservations",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations"
               ]
             },
@@ -964,12 +1064,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/reservations",
+              "raw": "{{bffUrl}}/api/v1/reservations",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations"
               ]
             },
@@ -999,12 +1100,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/reservations",
+              "raw": "{{bffUrl}}/api/v1/reservations",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations"
               ]
             }
@@ -1032,12 +1134,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/reservations",
+              "raw": "{{bffUrl}}/api/v1/reservations",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations"
               ]
             }
@@ -1065,12 +1168,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}",
+              "raw": "{{bffUrl}}/api/v1/reservations/{{reservaId}}",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations",
                 "{{reservaId}}"
               ]
@@ -1099,12 +1203,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/reservations/999999",
+              "raw": "{{bffUrl}}/api/v1/reservations/999999",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations",
                 "999999"
               ]
@@ -1142,12 +1247,13 @@
               "raw": "{\"status\":\"CONFIRMADA\"}"
             },
             "url": {
-              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}/status",
+              "raw": "{{bffUrl}}/api/v1/reservations/{{reservaId}}/status",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations",
                 "{{reservaId}}",
                 "status"
@@ -1187,12 +1293,13 @@
               "raw": "{\"status\":\"CHECKIN_PENDIENTE\"}"
             },
             "url": {
-              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}/status",
+              "raw": "{{bffUrl}}/api/v1/reservations/{{reservaId}}/status",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations",
                 "{{reservaId}}",
                 "status"
@@ -1232,12 +1339,13 @@
               "raw": "{\"status\":\"EN_ESTADIA\"}"
             },
             "url": {
-              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}/status",
+              "raw": "{{bffUrl}}/api/v1/reservations/{{reservaId}}/status",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations",
                 "{{reservaId}}",
                 "status"
@@ -1277,12 +1385,13 @@
               "raw": "{\"status\":\"CHECKOUT\"}"
             },
             "url": {
-              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}/status",
+              "raw": "{{bffUrl}}/api/v1/reservations/{{reservaId}}/status",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations",
                 "{{reservaId}}",
                 "status"
@@ -1322,12 +1431,13 @@
               "raw": "{\"status\":\"CONFIRMADA\"}"
             },
             "url": {
-              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}/status",
+              "raw": "{{bffUrl}}/api/v1/reservations/{{reservaId}}/status",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations",
                 "{{reservaId}}",
                 "status"
@@ -1373,12 +1483,13 @@
               "raw": "{\n  \"unitId\": {{unitId}},\n  \"checkIn\": \"{{fechaEntrada}}\",\n  \"checkOut\": \"{{fechaSalida}}\",\n  \"huespedes\": 99,\n  \"guestId\": \"prueba-postman\",\n  \"guestEmail\": \"prueba@example.cl\"\n}"
             },
             "url": {
-              "raw": "{{bffUrl}}/api/reservations",
+              "raw": "{{bffUrl}}/api/v1/reservations",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations"
               ]
             }
@@ -1414,12 +1525,13 @@
               "raw": "{\n  \"unitId\": {{unitId}},\n  \"checkIn\": \"{{fechaSalida}}\",\n  \"checkOut\": \"{{fechaEntrada}}\",\n  \"huespedes\": 1,\n  \"guestId\": \"prueba-postman\",\n  \"guestEmail\": \"prueba@example.cl\"\n}"
             },
             "url": {
-              "raw": "{{bffUrl}}/api/reservations",
+              "raw": "{{bffUrl}}/api/v1/reservations",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations"
               ]
             }
@@ -1455,12 +1567,13 @@
               "raw": "{\"status\":\"ESTADO_QUE_NO_EXISTE\"}"
             },
             "url": {
-              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}/status",
+              "raw": "{{bffUrl}}/api/v1/reservations/{{reservaId}}/status",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations",
                 "{{reservaId}}",
                 "status"
@@ -1499,12 +1612,13 @@
               "raw": "{\"status\":\"CONFIRMADA\"}"
             },
             "url": {
-              "raw": "{{bffUrl}}/api/reservations/{{reservaId}}/status",
+              "raw": "{{bffUrl}}/api/v1/reservations/{{reservaId}}/status",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations",
                 "{{reservaId}}",
                 "status"
@@ -1543,12 +1657,13 @@
               "raw": "{\"status\":\"CONFIRMADA\"}"
             },
             "url": {
-              "raw": "{{bffUrl}}/api/reservations/{{reservaSinCupoId}}/status",
+              "raw": "{{bffUrl}}/api/v1/reservations/{{reservaSinCupoId}}/status",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "reservations",
                 "{{reservaSinCupoId}}",
                 "status"
@@ -1587,12 +1702,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/report/kpis?range=last24h",
+              "raw": "{{bffUrl}}/api/v1/report/kpis?range=last24h",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "report",
                 "kpis"
               ],
@@ -1627,12 +1743,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/report/kpis?range=last24h",
+              "raw": "{{bffUrl}}/api/v1/report/kpis?range=last24h",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "report",
                 "kpis"
               ],
@@ -1667,12 +1784,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/audit/events?from={{fechaEntrada}}&to={{fechaSalida}}",
+              "raw": "{{bffUrl}}/api/v1/audit/events?from={{fechaEntrada}}&to={{fechaSalida}}",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "audit",
                 "events"
               ],
@@ -1711,12 +1829,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/audit/events?from={{fechaEntrada}}&to={{fechaSalida}}",
+              "raw": "{{bffUrl}}/api/v1/audit/events?from={{fechaEntrada}}&to={{fechaSalida}}",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "audit",
                 "events"
               ],
@@ -1756,12 +1875,13 @@
             "method": "POST",
             "header": [],
             "url": {
-              "raw": "{{catalogUrl}}/api/catalog/internal/units/1/hold?from={{fechaEntrada}}&to={{fechaSalida}}&holdId=intruso",
+              "raw": "{{catalogUrl}}/api/v1/catalog/internal/units/1/hold?from={{fechaEntrada}}&to={{fechaSalida}}&holdId=intruso",
               "host": [
                 "{{catalogUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "catalog",
                 "internal",
                 "units",
@@ -1807,12 +1927,13 @@
               }
             ],
             "url": {
-              "raw": "{{bffUrl}}/api/catalog/internal/units/1/hold?from={{fechaEntrada}}&to={{fechaSalida}}&holdId=porelbff",
+              "raw": "{{bffUrl}}/api/v1/catalog/internal/units/1/hold?from={{fechaEntrada}}&to={{fechaSalida}}&holdId=porelbff",
               "host": [
                 "{{bffUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "catalog",
                 "internal",
                 "units",
@@ -1862,17 +1983,18 @@
       "description": "Requiere gatewayUrl. En local estas pruebas fallan a propósito, porque no hay gateway.",
       "item": [
         {
-          "name": "401 · GET /staff/reservations sin token",
+          "name": "401 · GET /staff/v1/reservations sin token",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{gatewayUrl}}/staff/reservations",
+              "raw": "{{gatewayUrl}}/staff/v1/reservations",
               "host": [
                 "{{gatewayUrl}}"
               ],
               "path": [
                 "staff",
+                "v1",
                 "reservations"
               ]
             },
@@ -1891,7 +2013,7 @@
           ]
         },
         {
-          "name": "200 · GET /staff/reservations como Admin",
+          "name": "200 · GET /staff/v1/reservations como Admin",
           "request": {
             "method": "GET",
             "header": [
@@ -1901,12 +2023,13 @@
               }
             ],
             "url": {
-              "raw": "{{gatewayUrl}}/staff/reservations",
+              "raw": "{{gatewayUrl}}/staff/v1/reservations",
               "host": [
                 "{{gatewayUrl}}"
               ],
               "path": [
                 "staff",
+                "v1",
                 "reservations"
               ]
             }
@@ -1924,7 +2047,7 @@
           ]
         },
         {
-          "name": "403 · GET /staff/report/kpis como Cliente",
+          "name": "403 · GET /staff/v1/report/kpis como Cliente",
           "request": {
             "method": "GET",
             "header": [
@@ -1934,12 +2057,13 @@
               }
             ],
             "url": {
-              "raw": "{{gatewayUrl}}/staff/report/kpis",
+              "raw": "{{gatewayUrl}}/staff/v1/report/kpis",
               "host": [
                 "{{gatewayUrl}}"
               ],
               "path": [
                 "staff",
+                "v1",
                 "report",
                 "kpis"
               ]
@@ -1969,12 +2093,13 @@
               }
             ],
             "url": {
-              "raw": "{{gatewayUrl}}/staff/ruta-que-no-existe",
+              "raw": "{{gatewayUrl}}/staff/v1/ruta-que-no-existe",
               "host": [
                 "{{gatewayUrl}}"
               ],
               "path": [
                 "staff",
+                "v1",
                 "ruta-que-no-existe"
               ]
             },
@@ -2011,12 +2136,13 @@
               }
             ],
             "url": {
-              "raw": "{{gatewayUrl}}/api/me",
+              "raw": "{{gatewayUrl}}/api/v1/me",
               "host": [
                 "{{gatewayUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "me"
               ]
             }
@@ -2049,12 +2175,13 @@
               }
             ],
             "url": {
-              "raw": "{{gatewayUrl}}/api/me",
+              "raw": "{{gatewayUrl}}/api/v1/me",
               "host": [
                 "{{gatewayUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "me"
               ]
             }
@@ -2087,12 +2214,13 @@
               }
             ],
             "url": {
-              "raw": "{{nginxUrl}}/api/me",
+              "raw": "{{nginxUrl}}/api/v1/me",
               "host": [
                 "{{nginxUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "me"
               ]
             },
@@ -2126,12 +2254,13 @@
               }
             ],
             "url": {
-              "raw": "{{nginxUrl}}/api/me",
+              "raw": "{{nginxUrl}}/api/v1/me",
               "host": [
                 "{{nginxUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "me"
               ]
             },
@@ -2144,6 +2273,873 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "10 · ms-andesstay-mq · bloque 8 del guion",
+      "description": "Sigue el bloque 8 del guion de exposición, en su orden. Córrela con «Run folder»: los pasos dependen entre sí --el 6 borra lo que creó el 1-- así que suelto y en otro orden dan resultados distintos.\n\nNecesita túnel, porque mq se publica solo en el loopback de ec2-mq:\n  ssh -i <clave> -L 8086:localhost:8086 ubuntu@<ip-de-mq>",
+      "item": [
+        {
+          "name": "1 · 201 · POST cola q.demo.presentacion",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{mqUrl}}/api/v1/mq/queues",
+              "host": [
+                "{{mqUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "mq",
+                "queues"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"q.demo.presentacion\",\n  \"durable\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "El nombre NO empieza por q.cmd., así que la política de alta disponibilidad --patrón ^q\\.cmd\\.-- no la espeja. Si quieres mostrar el espejado en la consola, usa un nombre con ese prefijo."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2a · 201 · POST exchange de demo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{mqUrl}}/api/v1/mq/exchanges",
+              "host": [
+                "{{mqUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "mq",
+                "exchanges"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"demo.presentacion\",\n  \"tipo\": \"DIRECT\",\n  \"durable\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2b · 201 · POST binding al exchange de demo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{mqUrl}}/api/v1/mq/bindings",
+              "host": [
+                "{{mqUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "mq",
+                "bindings"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"demo.presentacion\",\n  \"destino\": \"q.demo.presentacion\",\n  \"tipoDestino\": \"QUEUE\",\n  \"routingKey\": \"demo.key\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3 · 400 · POST cola con nombre inválido",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{mqUrl}}/api/v1/mq/queues",
+              "host": [
+                "{{mqUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "mq",
+                "queues"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"cola con espacios y $imbolos\",\n  \"durable\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "La validación es un @Pattern en el DTO, así que el 400 se devuelve ANTES de tocar el broker. Un nombre con espacios llegaría a crear una cola inalcanzable por la mayoría de los clientes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('el cuerpo dice que es de validacion', () => {",
+                  "  pm.expect(JSON.stringify(pm.response.json())).to.match(/VALIDACION|nombre/i);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4 · 409 · DELETE q.cmd.email incluso con forzar=true",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mqUrl}}/api/v1/mq/queues/q.cmd.email?forzar=true",
+              "host": [
+                "{{mqUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "mq",
+                "queues",
+                "q.cmd.email"
+              ],
+              "query": [
+                {
+                  "key": "forzar",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Los doce nombres de la topología están en una lista explícita, y forzar=true NO la levanta: cambiarla exige editar la configuración y volver a desplegar. Borrar q.cmd.email dejaría a notify sin cola de trabajo, y en RabbitMQ un borrado es irreversible: se van los mensajes que tuviera dentro."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409', () => pm.response.to.have.status(409));",
+                  "pm.test('forzar=true no levanta la proteccion', () => {",
+                  "  pm.expect(pm.response.code, 'si da 204, la cola SE BORRO').to.eql(409);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5 · 401 · la misma llamada sin token",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{mqUrl}}/api/v1/mq/queues/q.cmd.email?forzar=true",
+              "host": [
+                "{{mqUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "mq",
+                "queues",
+                "q.cmd.email"
+              ],
+              "query": [
+                {
+                  "key": "forzar",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6a · 204 · DELETE el binding de demo",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mqUrl}}/api/v1/mq/bindings?exchange=demo.presentacion&destino=q.demo.presentacion&tipoDestino=QUEUE&routingKey=demo.key",
+              "host": [
+                "{{mqUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "mq",
+                "bindings"
+              ],
+              "query": [
+                {
+                  "key": "exchange",
+                  "value": "demo.presentacion"
+                },
+                {
+                  "key": "destino",
+                  "value": "q.demo.presentacion"
+                },
+                {
+                  "key": "tipoDestino",
+                  "value": "QUEUE"
+                },
+                {
+                  "key": "routingKey",
+                  "value": "demo.key"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6b · 204 · DELETE el exchange de demo",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mqUrl}}/api/v1/mq/exchanges/demo.presentacion",
+              "host": [
+                "{{mqUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "mq",
+                "exchanges",
+                "demo.presentacion"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6c · 204 · DELETE la cola de demo",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mqUrl}}/api/v1/mq/queues/q.demo.presentacion",
+              "host": [
+                "{{mqUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "mq",
+                "queues",
+                "q.demo.presentacion"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6d · 200 · GET queues: la de demo ya no está",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mqUrl}}/api/v1/mq/queues",
+              "host": [
+                "{{mqUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "mq",
+                "queues"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('quedan las nueve del sistema y no la de demo', () => {",
+                  "  const n = pm.response.json().map(q => q.nombre || q.name);",
+                  "  pm.expect(n, 'la de demo sigue ahi').to.not.include('q.demo.presentacion');",
+                  "  pm.expect(n.filter(x => x && x.startsWith('q.cmd.')).length,",
+                  "    'colas del sistema').to.eql(9);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "— 204 · DELETE de una cola inexistente (idempotente)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mqUrl}}/api/v1/mq/queues/q.no.existe.en.absoluto",
+              "host": [
+                "{{mqUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "mq",
+                "queues",
+                "q.no.existe.en.absoluto"
+              ]
+            },
+            "description": "204 y NO 404, y conviene saber por qué antes de que lo pregunten: sobre una cola inexistente el broker responde bien y deleteQueue devuelve true, porque trata la eliminación como idempotente. Borrar algo que no está deja el sistema en el estado pedido."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204', () => pm.response.to.have.status(204));",
+                  "pm.test('la eliminacion es idempotente', () => {",
+                  "  pm.expect(pm.response.code, 'un 404 aqui seria un cambio de contrato').to.eql(204);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "— 404 · PURGE de una cola inexistente",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mqUrl}}/api/v1/mq/queues/q.no.existe.en.absoluto/purge",
+              "host": [
+                "{{mqUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "mq",
+                "queues",
+                "q.no.existe.en.absoluto",
+                "purge"
+              ]
+            },
+            "description": "Aquí SÍ es 404, al contrario que el DELETE de arriba: purgeQueue lanza cuando la cola no existe. La asimetría es real y está fijada a propósito, porque es fácil \"corregirla\" por simetría y romper el comportamiento idempotente del borrado."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "11 · ms-andesstay-notify · bloque 7 del guion",
+      "description": "El estado de las colas y las métricas, ambos protegidos. Necesita túnel:\n  ssh -i <clave> -L 8085:localhost:8085 ubuntu@<ip-de-mq>\n\nLas cabeceras de un mensaje en cuarentena NO se ven aquí ni en la consola del broker: DeadLetterConsumer confirma cada mensaje que llega, así que las DLQ vuelven a cero. Esa evidencia está en el log:  docker logs andesstay-notify | grep \"\\[DLQ\\]\"",
+      "item": [
+        {
+          "name": "200 · GET /notify/status como Admin",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{notifyUrl}}/api/v1/notify/status",
+              "host": [
+                "{{notifyUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notify",
+                "status"
+              ]
+            },
+            "description": "Los contadores de las nueve colas. Son NUEVE, no seis: las tres de espera entraron con el rediseño del reintento."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('informa de las nueve colas', () => {",
+                  "  const t = JSON.stringify(pm.response.json());",
+                  "  ['q.cmd.email','q.cmd.email.retry','q.cmd.email.dlq'].forEach(q =>",
+                  "    pm.expect(t, q).to.include(q));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 · GET /notify/status sin token",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{notifyUrl}}/api/v1/notify/status",
+              "host": [
+                "{{notifyUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notify",
+                "status"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 · GET /notify/status como Cliente",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenCliente}}"
+              }
+            ],
+            "url": {
+              "raw": "{{notifyUrl}}/api/v1/notify/status",
+              "host": [
+                "{{notifyUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notify",
+                "status"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · GET health sin token",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{notifyUrl}}/actuator/health",
+              "host": [
+                "{{notifyUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
+            },
+            "description": "Público a propósito: lo usa el healthcheck del contenedor, que no tiene token."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('UP', () => pm.expect(pm.response.json().status).to.eql('UP'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 · GET metrics sin token",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{notifyUrl}}/actuator/metrics/notify.messages.dlq",
+              "host": [
+                "{{notifyUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "metrics",
+                "notify.messages.dlq"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · GET metrics notify.messages.dlq como Admin",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{notifyUrl}}/actuator/metrics/notify.messages.dlq",
+              "host": [
+                "{{notifyUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "metrics",
+                "notify.messages.dlq"
+              ]
+            },
+            "description": "Ojo: Micrometer no crea un contador hasta que se incrementa, así que un 404 aquí significa CERO mensajes en cuarentena desde el último arranque, no que la métrica no exista. Provoca un error permanente antes de mostrarla en la exposición."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 si ya hubo cuarentena, 404 si todavia ninguna', () => {",
+                  "  pm.expect([200, 404], 'codigo').to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 404) {",
+                  "  console.warn('notify.messages.dlq no existe aun: ningun mensaje llego a",
+                  "    una DLQ desde el arranque. Provoca un error permanente y repite.');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "12 · Auditoría · DEFECTO de ruta en develop",
+      "description": "ApiPaths.AUDIT ya vale /api/v1/audit y los métodos del controlador añaden otro /v1/, así que la versión queda DUPLICADA y audit solo responde en /api/v1/audit/v1/... El bundle de la SPA llama a /api/v1/audit, de modo que la pantalla de auditoría devuelve 404.\n\nMedido contra el entorno desplegado el 16/10/2026.",
+      "item": [
+        {
+          "name": "404 · REGRESIÓN: la ruta correcta no responde",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/v1/audit/reservations/{{reservaId}}/timeline",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "audit",
+                "reservations",
+                "{{reservaId}}",
+                "timeline"
+              ]
+            },
+            "description": "Esta prueba documenta el defecto: espera 404 porque hoy es lo que pasa. Cuando se quite el /v1/ duplicado de los @GetMapping, devolverá 200 y esta prueba fallará: eso es la señal de que el defecto se arregló. Cámbiala a 200 entonces y borra la carpeta de abajo."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));",
+                  "// Mientras este test pase, la pantalla de auditoria de la SPA esta rota.",
+                  "pm.test('DEFECTO ABIERTO: /api/v1/audit/** no responde', () => {",
+                  "  pm.expect(pm.response.code, 'si ves 200, el defecto se arreglo').to.eql(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · la ruta REAL, con la versión duplicada",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/v1/audit/v1/reservations/{{reservaId}}/timeline",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "audit",
+                "v1",
+                "reservations",
+                "{{reservaId}}",
+                "timeline"
+              ]
+            },
+            "description": "Así es como hay que llamarlo hoy. Verificado: devuelve 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 · la ruta real como Operador",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenOperador}}"
+              }
+            ],
+            "url": {
+              "raw": "{{bffUrl}}/api/v1/audit/v1/events/actor/{{actorId}}",
+              "host": [
+                "{{bffUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "audit",
+                "v1",
+                "events",
+                "actor",
+                "{{actorId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));"
                 ]
               }
             }
