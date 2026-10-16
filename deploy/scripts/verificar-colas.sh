@@ -117,6 +117,49 @@ PELDANOS="$(awk -F, '{print NF}' <<<"$ESCALERA")"
 # Credenciales y utilidades
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# Dónde se ejecuta esto
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+#
+# Este script corre EN la máquina del broker, no en el equipo del operador: lee la contraseña del
+# contenedor que ya la tiene, para que no viaje como argumento ni quede en el historial de nadie.
+#
+# La comprobación mira si el nodo del broker está CORRIENDO aquí. No basta con que el contenedor
+# exista: el equipo del operador puede tener uno local de desarrollo, detenido, con el mismo nombre
+# que el de la instancia, y entonces cualquier comprobación por nombre a secas da un falso
+# positivo. Comprobar si existe `docker` sirve aún menos: un equipo con Docker Desktop lo tiene.
+if ! docker inspect -f '{{.State.Running}}' andesstay-rabbitmq1 2>/dev/null | grep -qx true; then
+    if docker inspect andesstay-rabbitmq1 > /dev/null 2>&1; then
+        cat >&2 <<'FIN'
+
+Aquí hay un contenedor andesstay-rabbitmq1, pero está DETENIDO.
+
+Si querías comprobar el entorno desplegado en AWS, este script va en su máquina:
+
+    ssh -i ~/.ssh/<clave>.pem ubuntu@<ip-de-ec2-mq> 'bash -s' < <este-script>
+
+Si querías comprobar tu broker local, levántalo primero:
+
+    docker compose --env-file mq.env -f infra/mq/compose.yml up -d
+
+FIN
+    else
+        cat >&2 <<'FIN'
+
+Este script se ejecuta EN la máquina del broker, y aquí no está el contenedor andesstay-rabbitmq1.
+
+Lánzalo así, desde el equipo del operador:
+
+    ssh -i ~/.ssh/<clave>.pem ubuntu@<ip-de-ec2-mq> 'bash -s' < <este-script>
+
+El guion se envía por la entrada estándar y se ejecuta allá, que es donde viven el broker, sus
+credenciales y las herramientas que necesita.
+
+FIN
+    fi
+    exit 1
+fi
+
 # Se leen del contenedor del broker, que es la única copia que esta máquina necesita tener. No se
 # imprimen ni se pasan por la línea de órdenes.
 entorno_broker() {
@@ -456,16 +499,38 @@ for f in "${FLUJOS[@]}"; do
     fi
 done
 
-titulo "9 · Contadores del servicio"
+titulo "9 · El actuator de notify esta protegido"
+
+# POR QUE AQUI NO SE LEEN LAS METRICAS. Las métricas del servicio están detrás de hasRole("Admin"),
+# así que leerlas exigiría un token de Entra que este script no puede emitir. Tampoco hace falta:
+# toda la contabilidad de las secciones 7 y 8 sale de los contadores del BROKER, no de notify, de
+# modo que la prueba de que no se pierde ningún mensaje no depende del servicio que se está
+# probando. Eso es deliberado y es mejor así.
+#
+# Lo que sí se comprueba es que la protección está puesta, que es una propiedad de corrección por
+# derecho propio. Antes este paso leía las métricas sin token: desde que se protegieron, imprimía
+# "ausente" tres veces y aparentaba comprobar algo que ya no comprobaba.
+#
 # La imagen de notify no trae curl, solo el wget de busybox, y su actuator escucha en 8085: es el
-# mismo par que usa su healthcheck del compose.
-api_notify() { docker exec andesstay-notify sh -c "wget -qO- http://127.0.0.1:8085$1" 2>/dev/null || true; }
-for m in processed dlq retried; do
-    valor="$(api_notify "/actuator/metrics/notify.messages.$m" \
-             | jq -r '.measurements[0].value // "ausente"' 2>/dev/null || echo ausente)"
-    printf '  notify.messages.%-10s %s\n' "$m" "$valor"
-done
-nota "los tres tienen que ser distintos de cero; 'retried' solo sube con --transitorio"
+# mismo par que usa su healthcheck del compose. Se pide el código de estado, no el cuerpo.
+codigo_notify() {
+    docker exec andesstay-notify sh -c \
+        "wget -S -q -O /dev/null http://127.0.0.1:8085$1 2>&1 | sed -n 's|.*HTTP/1.[01] \\([0-9]*\\).*|\\1|p' | head -n 1" \
+        2>/dev/null || true
+}
+
+salud="$(codigo_notify /actuator/health)"
+[[ "$salud" == "200" ]] && ok "/actuator/health responde 200 sin token, como debe" \
+                        || mal "/actuator/health devolvio '$salud', se esperaba 200"
+
+metricas="$(codigo_notify /actuator/metrics/notify.messages.processed)"
+case "$metricas" in
+    401|403) ok "/actuator/metrics exige autenticacion (devolvio $metricas)" ;;
+    200)     mal "/actuator/metrics responde 200 SIN token: la proteccion no esta puesta" ;;
+    *)       mal "/actuator/metrics devolvio '$metricas', se esperaba 401 o 403" ;;
+esac
+
+nota "los contadores de mensajes de las secciones 7 y 8 vienen del broker, no de notify"
 
 titulo "Resultado"
 if (( FALLOS == 0 )); then
