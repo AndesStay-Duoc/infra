@@ -110,8 +110,12 @@ idempotente y no era transaccional respecto del rango.
 
 ## Reglas de propiedad
 
-1. Un `Cliente` solo ve y opera **sus** reservas. La comprobación la hace `ReservationSecurity`
-   comparando el `sub` del token con el `guestId`.
+1. Un `Cliente` solo ve y opera **sus** reservas. La comprobación la hace `ReservationSecurity`:
+   - Si la reserva tiene `guestId`, compara el `sub` del token con el `guestId`. El correo no
+     cuenta: otra cuenta con el mismo correo no puede tomarla.
+   - Si no lo tiene, la creó recepción a nombre de un huésped cuya cuenta no conoce. Entonces
+     compara el correo del token con el `guestEmail`, sin distinguir mayúsculas. Así el huésped
+     ve y puede cancelar la reserva al ingresar con ese correo.
 2. Un `Cliente` solo puede cancelar, y únicamente mientras la reserva esté en `CREADA`.
 3. El `guestId` y el `guestEmail` de una reserva creada por un `Cliente` se **fuerzan** desde el
    token, se mande lo que se mande en el cuerpo. Es lo que impide reservar a nombre de otro.
