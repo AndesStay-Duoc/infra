@@ -6,6 +6,12 @@ version: "3.9"
 #           docker compose -f infra/kafka/compose.yml up -d
 #           docker compose -f infra/apps/compose.yml up -d
 
+# Estado local de las topologías de Kafka Streams. Declararlo como volumen y no como directorio
+# del contenedor es lo que hace que sobreviva a un docker compose up --build.
+volumes:
+  report-streams:
+  audit-streams:
+
 networks:
   andesstay-apps:
     driver: bridge
@@ -100,8 +106,14 @@ services:
       SPRING_DATASOURCE_USERNAME: ${ORACLE_USER}
       SPRING_DATASOURCE_PASSWORD: ${ORACLE_PASSWORD}
       KAFKA_BOOTSTRAP: kafka1:29092,kafka2:29093,kafka3:29094
+      # Kafka Streams guarda aquí su estado local. Sin volumen, cada reinicio obliga a
+      # reconstruirlo desde el changelog del clúster: funciona, pero el servicio tarda en
+      # responder y durante ese rato los KPIs en vivo salen incompletos.
+      KAFKA_STREAMS_STATE_DIR: /var/lib/kafka-streams
       AZURE_TENANT_ID: ${AZURE_TENANT_ID}
       AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+    volumes:
+      - report-streams:/var/lib/kafka-streams
     networks:
       - andesstay-apps
       - andesstay-kafka
@@ -117,8 +129,14 @@ services:
       SPRING_DATASOURCE_USERNAME: ${ORACLE_USER}
       SPRING_DATASOURCE_PASSWORD: ${ORACLE_PASSWORD}
       KAFKA_BOOTSTRAP: kafka1:29092,kafka2:29093,kafka3:29094
+      # Kafka Streams guarda aquí su estado local. Sin volumen, cada reinicio obliga a
+      # reconstruirlo desde el changelog del clúster: funciona, pero el servicio tarda en
+      # responder y durante ese rato los KPIs en vivo salen incompletos.
+      KAFKA_STREAMS_STATE_DIR: /var/lib/kafka-streams
       AZURE_TENANT_ID: ${AZURE_TENANT_ID}
       AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+    volumes:
+      - audit-streams:/var/lib/kafka-streams
     networks:
       - andesstay-apps
       - andesstay-kafka

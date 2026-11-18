@@ -5,12 +5,12 @@ info:
     Panel de operaciones en tiempo real. Solo lectura: las agregaciones se construyen
     consumiendo el topico Kafka reservations.events, sin bloquear ni acoplar al
     servicio de reservas.
-  version: 1.0.0
+  version: 1.1.0
 
 servers:
-  - url: http://localhost:8085
+  - url: http://localhost:8083
     description: Desarrollo local
-  - url: http://ec2-apps:8085
+  - url: http://ec2-apps:8083
     description: Despliegue en EC2 (red interna)
 
 security:
@@ -43,6 +43,40 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Kpis' }
         '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+
+  /api/v1/report/kpis/live:
+    get:
+      tags: [kpis]
+      summary: Los mismos KPIs, leidos del estado de Kafka Streams
+      description: >
+        Devuelve ocupacion activa, tiempo de ciclo medio y reservas por hora, pero
+        leidos del almacen que la topologia de Kafka Streams mantiene al dia en vez
+        de consultados a MySQL.
+
+
+        La diferencia no es cosmetica. /kpis recorre el historico en cada llamada y
+        su coste crece con los datos; esto lee un valor ya calculado y responde igual
+        de rapido con un evento o con un millon, asi que el panel puede refrescarse
+        solo. Ademas incluye el tiempo de ciclo, que se mide restando los instantes
+        reales de reservation.created y del evento de cierre de cada reserva.
+
+
+        Si la topologia no esta corriendo —porque el servicio se desplego sin
+        clúster— responde disponible=false en lugar de ceros, que serian
+        indistinguibles de "no ha pasado nada". Solo Admin.
+      operationId: obtenerKpisEnVivo
+      parameters:
+        - name: range
+          in: query
+          schema: { $ref: '#/components/schemas/Rango' }
+      responses:
+        '200':
+          description: KPIs en vivo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KpisEnVivo' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/RolInsuficiente' }
 
@@ -86,6 +120,41 @@ components:
       description: Solo tokens del tenant corporativo, con rol Admin.
 
   schemas:
+    KpisEnVivo:
+      type: object
+      properties:
+        range: { type: string, example: last24h }
+        fuente:
+          type: string
+          enum: [kafka-streams]
+          description: De donde salen estos numeros, para distinguirlos de los de /kpis
+        disponible:
+          type: boolean
+          description: Si la topologia de Kafka Streams esta corriendo
+        detalle:
+          type: string
+          description: Presente solo cuando disponible es false
+        reservasConocidas:
+          type: integer
+          description: Cuantas reservas hay en el almacen de estado
+        activeReservations:
+          type: integer
+          description: Reservas en estadia ahora mismo
+        tiempoDeCicloMedioMinutos:
+          type: integer
+          nullable: true
+          description: >
+            Media en minutos de lo que duraron las reservas ya cerradas, de la
+            creacion al checkout o a la cancelacion. Null si todavia no hay ninguna
+            cerrada, que es distinto de cero.
+        reservationsPerHour:
+          type: array
+          items:
+            type: object
+            properties:
+              hour: { type: string, example: '2026-11-17 14' }
+              total: { type: integer }
+
     Rango:
       type: string
       enum: [last24h, last7d, last30d]

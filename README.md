@@ -15,7 +15,8 @@ el mismo PR.
 | `oracle/` | Compose de Oracle Free y scripts de creación de esquemas |
 | `apps/` | Compose de los microservicios para `ec2-apps` |
 | `mq/` | Compose del clúster RabbitMQ para `ec2-mq` |
-| `kafka/` | Compose de Zookeeper y Kafka para `ec2-kafka` |
+| `kafka/` | Compose de 3 Zookeeper, 3 brokers y Kafka UI para `ec2-kafka`, más los scripts de administración de tópicos y consumer groups |
+| `deploy/` | Scripts de creación de las tres instancias en AWS y el compose de despliegue |
 
 ## Contratos
 
