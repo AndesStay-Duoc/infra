@@ -1,11 +1,32 @@
-version: "3.9"
-
 # Zookeeper 3 nodos + Kafka 3 brokers + Kafka UI
 # Puertos Kafka: 9092, 9093, 9094
 # Kafka UI: http://localhost:8090
+#
+# ── EL OYENTE ANUNCIADO ─────────────────────────────────────────────────────────────────────────
+#
+# Cada broker anuncia DOS direcciones. PLAINTEXT://kafkaN:2909N es la interna, la que usan los
+# brokers entre sí y los contenedores de la misma red. PLAINTEXT_HOST://$KAFKA_ADVERTISED_HOST:909N
+# es la que se entrega a cualquier cliente de fuera.
+#
+# Eso último es lo que decide si el despliegue funciona. Un cliente conecta al bootstrap, el broker
+# le responde con la dirección anunciada y el cliente SE RECONECTA a ella: si el broker anuncia
+# "localhost" y el cliente está en otra máquina, se conecta a sí mismo y el error no menciona a
+# Kafka por ninguna parte. En local la variable no se define y vale localhost, que es correcto;
+# en EC2 se fija a la IP privada de la instancia para que ec2-apps pueda alcanzarla.
+#
+# ── LA MEMORIA ──────────────────────────────────────────────────────────────────────────────────
+#
+# Seis JVM con los valores por defecto piden 3 × 1 GB (brokers) + 3 × 512 MB (Zookeeper) = 4,5 GB,
+# más el sistema: no caben en una t3.medium de 4 GB. Los montones se acotan a 512 MB por broker y
+# 256 MB por nodo de Zookeeper, que suman 2,3 GB y dejan margen a Docker, a Kafka UI y al sistema.
+# Para el volumen de este caso sobra holgadamente; lo que no sobra es el margen si no se acotan.
 
 networks:
   andesstay-kafka:
+    # Nombre fijo. Sin él, Docker antepone el nombre del proyecto y la red se llama
+    # kafka_andesstay-kafka, así que apps/compose.yml, que la declara external con el nombre
+    # andesstay-kafka, no la encuentra y no arranca.
+    name: andesstay-kafka
     driver: bridge
 
 volumes:
@@ -29,8 +50,11 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
       ZOOKEEPER_SERVER_ID: 1
       ZOOKEEPER_SERVERS: "zookeeper1:2888:3888;zookeeper2:2888:3888;zookeeper3:2888:3888"
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx256m"
     ports:
       - "2181:2181"
+    mem_limit: 384m
+    restart: unless-stopped
     volumes:
       - zk1-data:/var/lib/zookeeper/data
       - zk1-log:/var/lib/zookeeper/log
@@ -41,12 +65,19 @@ services:
     image: confluentinc/cp-zookeeper:7.6.1
     container_name: andesstay-zk2
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2182
+      # 2181 dentro de la red, igual que en los otros dos nodos: es el puerto al que apuntan los
+      # brokers (KAFKA_ZOOKEEPER_CONNECT). Con 2182, la entrada zookeeper2:2181 de esa lista no
+      # respondía y, si caía zookeeper1, los brokers se quedaban sin Zookeeper. En el host se sigue
+      # publicando como 2182, que es lo único que necesita ser distinto.
+      ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
       ZOOKEEPER_SERVER_ID: 2
       ZOOKEEPER_SERVERS: "zookeeper1:2888:3888;zookeeper2:2888:3888;zookeeper3:2888:3888"
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx256m"
     ports:
       - "2182:2181"
+    mem_limit: 384m
+    restart: unless-stopped
     volumes:
       - zk2-data:/var/lib/zookeeper/data
       - zk2-log:/var/lib/zookeeper/log
@@ -57,12 +88,16 @@ services:
     image: confluentinc/cp-zookeeper:7.6.1
     container_name: andesstay-zk3
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2183
+      # 2181 dentro de la red, por el mismo motivo que en zookeeper2. En el host, 2183.
+      ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
       ZOOKEEPER_SERVER_ID: 3
       ZOOKEEPER_SERVERS: "zookeeper1:2888:3888;zookeeper2:2888:3888;zookeeper3:2888:3888"
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx256m"
     ports:
       - "2183:2181"
+    mem_limit: 384m
+    restart: unless-stopped
     volumes:
       - zk3-data:/var/lib/zookeeper/data
       - zk3-log:/var/lib/zookeeper/log
@@ -79,13 +114,40 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: "zookeeper1:2181,zookeeper2:2181,zookeeper3:2181"
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:29092,PLAINTEXT_HOST://${KAFKA_ADVERTISED_HOST:-localhost}:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       KAFKA_DEFAULT_REPLICATION_FACTOR: 3
       KAFKA_MIN_INSYNC_REPLICAS: 2
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+      # ── Tuning del broker ──────────────────────────────────────────────────
+      # La retención por defecto son 7 días y disco ilimitado. Aquí se acota también por tamaño:
+      # el disco de la instancia es pequeño y un tópico sin techo lo llena sin avisar. El valor
+      # por tópico manda sobre este, así que esto es solo el suelo común.
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_RETENTION_BYTES: 1073741824
+      # Cada cuánto revisa qué segmentos puede borrar. Un minuto hace la retención observable en
+      # la demostración; por defecto son cinco.
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 60000
+      # Tamaño de segmento. Kafka solo borra segmentos cerrados, así que con el 1 GB por defecto
+      # la retención no se ve nunca en un entorno de pruebas.
+      KAFKA_LOG_SEGMENT_BYTES: 268435456
+      # Los tópicos internos de compensaciones y de transacciones también con tres réplicas: con
+      # uno solo, la caída de un broker se llevaría por delante los offsets de todos los grupos.
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 3000
+      KAFKA_HEAP_OPTS: "-Xms512m -Xmx512m"
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "kafka1:29092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
     volumes:
       - kafka1-data:/var/lib/kafka/data
     networks:
@@ -100,13 +162,40 @@ services:
     environment:
       KAFKA_BROKER_ID: 2
       KAFKA_ZOOKEEPER_CONNECT: "zookeeper1:2181,zookeeper2:2181,zookeeper3:2181"
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:29093,PLAINTEXT_HOST://localhost:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:29093,PLAINTEXT_HOST://${KAFKA_ADVERTISED_HOST:-localhost}:9093
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       KAFKA_DEFAULT_REPLICATION_FACTOR: 3
       KAFKA_MIN_INSYNC_REPLICAS: 2
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+      # ── Tuning del broker ──────────────────────────────────────────────────
+      # La retención por defecto son 7 días y disco ilimitado. Aquí se acota también por tamaño:
+      # el disco de la instancia es pequeño y un tópico sin techo lo llena sin avisar. El valor
+      # por tópico manda sobre este, así que esto es solo el suelo común.
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_RETENTION_BYTES: 1073741824
+      # Cada cuánto revisa qué segmentos puede borrar. Un minuto hace la retención observable en
+      # la demostración; por defecto son cinco.
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 60000
+      # Tamaño de segmento. Kafka solo borra segmentos cerrados, así que con el 1 GB por defecto
+      # la retención no se ve nunca en un entorno de pruebas.
+      KAFKA_LOG_SEGMENT_BYTES: 268435456
+      # Los tópicos internos de compensaciones y de transacciones también con tres réplicas: con
+      # uno solo, la caída de un broker se llevaría por delante los offsets de todos los grupos.
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 3000
+      KAFKA_HEAP_OPTS: "-Xms512m -Xmx512m"
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "kafka2:29093"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
     volumes:
       - kafka2-data:/var/lib/kafka/data
     networks:
@@ -121,13 +210,40 @@ services:
     environment:
       KAFKA_BROKER_ID: 3
       KAFKA_ZOOKEEPER_CONNECT: "zookeeper1:2181,zookeeper2:2181,zookeeper3:2181"
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka3:29094,PLAINTEXT_HOST://localhost:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka3:29094,PLAINTEXT_HOST://${KAFKA_ADVERTISED_HOST:-localhost}:9094
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       KAFKA_DEFAULT_REPLICATION_FACTOR: 3
       KAFKA_MIN_INSYNC_REPLICAS: 2
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+      # ── Tuning del broker ──────────────────────────────────────────────────
+      # La retención por defecto son 7 días y disco ilimitado. Aquí se acota también por tamaño:
+      # el disco de la instancia es pequeño y un tópico sin techo lo llena sin avisar. El valor
+      # por tópico manda sobre este, así que esto es solo el suelo común.
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_RETENTION_BYTES: 1073741824
+      # Cada cuánto revisa qué segmentos puede borrar. Un minuto hace la retención observable en
+      # la demostración; por defecto son cinco.
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 60000
+      # Tamaño de segmento. Kafka solo borra segmentos cerrados, así que con el 1 GB por defecto
+      # la retención no se ve nunca en un entorno de pruebas.
+      KAFKA_LOG_SEGMENT_BYTES: 268435456
+      # Los tópicos internos de compensaciones y de transacciones también con tres réplicas: con
+      # uno solo, la caída de un broker se llevaría por delante los offsets de todos los grupos.
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 3000
+      KAFKA_HEAP_OPTS: "-Xms512m -Xmx512m"
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "kafka3:29094"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
     volumes:
       - kafka3-data:/var/lib/kafka/data
     networks:
@@ -138,22 +254,38 @@ services:
     image: confluentinc/cp-kafka:7.6.1
     container_name: andesstay-kafka-init
     depends_on: [kafka1, kafka2, kafka3]
+    restart: "no"
     networks:
       - andesstay-kafka
-    command: >
-      bash -c "
-        echo 'Esperando Kafka...' &&
-        cub kafka-ready -b kafka1:29092 3 60 &&
-        kafka-topics --create --if-not-exists --bootstrap-server kafka1:29092 --replication-factor 3 --partitions 3 --topic reservations.events &&
-        kafka-topics --create --if-not-exists --bootstrap-server kafka1:29092 --replication-factor 3 --partitions 3 --topic audit.timeline --config cleanup.policy=compact,delete &&
-        kafka-topics --create --if-not-exists --bootstrap-server kafka1:29092 --replication-factor 3 --partitions 3 --topic reservations.events.DLT &&
-        kafka-topics --create --if-not-exists --bootstrap-server kafka1:29092 --replication-factor 3 --partitions 3 --topic audit.timeline.DLT &&
-        echo 'Tópicos creados correctamente'
-      "
+    # Los cuatro tópicos y su configuración NO se escriben aquí: este contenedor ejecuta
+    # scripts/crear-topicos.sh, que es la única fuente de verdad de particiones, réplicas,
+    # min.insync.replicas, cleanup.policy y retention.ms. La justificación de cada valor está en
+    # docs/contracts/events/kafka.md.
+    #
+    # Antes la lista vivía duplicada aquí, dentro de un bloque "command: >" de YAML, y eso tenía
+    # dos problemas. El primero, que se desalineaba del script. El segundo, peor: el estilo ">"
+    # conserva los saltos de línea de las líneas con más sangría, así que bash recibía cada
+    # kafka-topics cortado de sus --topic y --config y el contenedor fallaba sin crear nada.
+    # Con la forma de lista de abajo no hay plegado que interpretar.
+    #
+    # El script crea con --if-not-exists y DESPUÉS aplica la configuración con kafka-configs
+    # --alter: así también corrige un tópico que ya existía con otros valores, cosa que ni
+    # "kafka-topics --create" ni el TopicBuilder de ms-andesstay-reservations hacen.
+    environment:
+      KAFKA_BOOTSTRAP: kafka1:29092,kafka2:29093,kafka3:29094
+    volumes:
+      - ./scripts:/scripts:ro
+    command:
+      - bash
+      - -c
+      - "cub kafka-ready -b kafka1:29092 3 120 && bash /scripts/crear-topicos.sh"
 
   # ── Kafka UI ─────────────────────────────────────────────────────────────────
+  # Kafka UI. La versión va fijada como la de los demás servicios: con :latest, dos personas
+  # levantando el clúster en días distintos obtienen interfaces distintas, y en una demostración
+  # eso es exactamente lo que no se quiere.
   kafka-ui:
-    image: provectuslabs/kafka-ui:latest
+    image: provectuslabs/kafka-ui:v0.7.2
     container_name: andesstay-kafka-ui
     depends_on: [kafka1, kafka2, kafka3]
     ports:
@@ -162,5 +294,10 @@ services:
       KAFKA_CLUSTERS_0_NAME: andesstay
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka1:29092,kafka2:29093,kafka3:29094
       KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper1:2181
+      # Deja administrar tópicos desde la interfaz, que es lo que se demuestra en la presentación.
+      KAFKA_CLUSTERS_0_READONLY: "false"
+      DYNAMIC_CONFIG_ENABLED: "true"
+    mem_limit: 512m
+    restart: unless-stopped
     networks:
       - andesstay-kafka

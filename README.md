@@ -15,7 +15,50 @@ el mismo PR.
 | `oracle/` | Compose de Oracle Free y scripts de creación de esquemas |
 | `apps/` | Compose de los microservicios para `ec2-apps` |
 | `mq/` | Compose del clúster RabbitMQ para `ec2-mq` |
-| `kafka/` | Compose de Zookeeper y Kafka para `ec2-kafka` |
+| `kafka/` | Compose de 3 Zookeeper, 3 brokers y Kafka UI para `ec2-kafka`, más los scripts de administración de tópicos y consumer groups |
+| `deploy/` | Scripts de creación de las tres instancias en AWS y el compose de despliegue |
+
+## Levantar el sistema en local
+
+En este orden, desde la carpeta que contiene `infra` y los repositorios de los servicios:
+
+```bash
+# 1. RabbitMQ (2 nodos), ms-andesstay-notify, ms-andesstay-mq y el buzón Mailpit
+cp infra/.env.example infra/.env            # completar valores
+docker compose --env-file infra/.env -f infra/mq/compose.yml up -d
+
+# 2. Kafka: 3 Zookeeper, 3 brokers, kafka-init (crea y configura los tópicos) y Kafka UI
+docker compose -f infra/kafka/compose.yml up -d
+
+# 3. MySQL y los microservicios (bff, reservations, catalog, report, audit, kafka-admin)
+cp infra/apps/.env.example infra/apps/.env  # completar valores
+docker compose --env-file infra/apps/.env -f infra/apps/compose.yml up -d --build
+```
+
+`apps/compose.yml` se conecta a las redes `andesstay-mq` y `andesstay-kafka`, que los dos primeros
+compose crean con ese nombre exacto. Por eso el orden importa.
+
+| Interfaz | Dirección |
+|---|---|
+| Kafka UI | http://localhost:8090 |
+| RabbitMQ Management | http://localhost:15672 |
+| Mailpit | http://localhost:8025 |
+| BFF | http://localhost:8080 |
+| Administrador de Kafka (`ms-andesstay-kafka`) | http://localhost:8087 |
+| Administrador de RabbitMQ (`ms-andesstay-mq`) | http://localhost:8086 |
+
+Para reparar o inspeccionar los tópicos y los grupos sobre un clúster en marcha:
+`bash infra/kafka/scripts/crear-topicos.sh`, `describir-topicos.sh` e `inspeccionar-grupos.sh`.
+
+### La bandera de Kafka de reservations
+
+`ms-andesstay-reservations` solo publica en `reservations.events` si
+`ANDESSTAY_EVENTS_KAFKA_ENABLED` vale `true`. En su `application.yml` vale `false` por defecto, a
+propósito: permite arrancar el servicio con `./mvnw spring-boot:run` sin ningún clúster, sin que
+cada reserva espere el `max.block.ms` del productor. Los dos compose que lo levantan junto al
+clúster, `apps/compose.yml` y `deploy/compose.yml`, la encienden (`true` por defecto) y la dejan
+como variable para poder apagarla sin editar el archivo. RabbitMQ tiene su propia bandera,
+`ANDESSTAY_EVENTS_RABBIT_ENABLED`, independiente de esta.
 
 ## Contratos
 
