@@ -47,8 +47,10 @@ TREINTA_DIAS=2592000000
 #
 # Lo que cambia por flujo es la retención:
 #   · reservations.events: registro de hechos recientes que alimenta reportería; 7 días y se borra.
-#   · audit.timeline: historial de quién hizo qué; compact,delete conserva el último hecho de cada
-#     reserva (la clave es el reservationId) y lo intermedio caduca a los 30 días.
+#   · audit.timeline: flujo de quién hizo qué; 30 días y compact,delete. delete pone el techo y
+#     borra TODO lo que supere los 30 días, también el último hecho de cada reserva; compact (la
+#     clave es el reservationId) reduce cada reserva a su hecho más reciente dentro de esa
+#     ventana. El historial completo no vive aquí sino en AUDIT_EVENTS de MySQL.
 #   · las DLT: evidencia de lo que falló; 14 días, el doble de la ventana de reservations.events,
 #     para que un fallo de un viernes siga ahí después de una semana sin revisar. Se borran, no se
 #     compactan: dos fallos del mismo evento son dos evidencias distintas y no deben pisarse.

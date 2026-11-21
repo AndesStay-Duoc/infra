@@ -46,11 +46,23 @@ de una topología nueva. Pasado ese plazo, el evento ya no aporta nada que la ba
 borra. No se compacta porque cada evento es un hecho distinto: compactar por `reservationId`
 dejaría solo la última transición y los KPI perderían la creación y la confirmación.
 
-**`audit.timeline`: `compact,delete` y 30 días.** Es el historial de quién hizo qué. La
-compactación, con la clave `reservationId`, garantiza que el último hecho de cada reserva se
-conserva aunque llegue a la retención; `delete` hace que lo intermedio caduque a los 30 días. Los
-30 días son la ventana de consulta de auditoría (la misma que usan los KPI históricos) y permiten
-reconstruir el timeline de un mes entero desde Kafka si la tabla se pierde.
+**`audit.timeline`: `compact,delete` y 30 días.** Es el flujo de quién hizo qué, ya derivado por
+la topología de `ms-andesstay-audit`. Las dos políticas actúan a la vez y conviene no confundir
+qué hace cada una:
+
+- **`delete` con 30 días** pone el techo: todo segmento más antiguo que `retention.ms` se borra,
+  **incluido el último hecho de cada reserva**. Con `compact,delete` nada sobrevive a la retención.
+  Los 30 días son la ventana de consulta de auditoría, la misma que usan los KPI históricos, y la
+  ventana en que un consumidor nuevo puede releer el tópico desde el principio.
+- **`compact`, con la clave `reservationId`,** reduce dentro de esa ventana cada reserva a su
+  hecho más reciente. Solo actúa sobre segmentos ya cerrados (`segment.bytes` en 256 MB), así que
+  el consumidor, que va al día, lee todos los hechos mucho antes de que el limpiador pase. Lo que
+  se gana es que una relectura completa recorre una entrada por reserva y no su historia entera:
+  el tópico queda como el estado más reciente de cada reserva en el último mes.
+
+Por eso **el historial completo no se reconstruye desde Kafka**. Vive en la tabla `AUDIT_EVENTS`,
+donde el consumidor `audit-timeline-group` guarda cada hecho, idempotente por `eventId`. Kafka
+transporta y amortigua; MySQL conserva.
 
 **Las DLT: `delete` y 14 días.** Guardan lo que falló, con las cabeceras de Spring Kafka (tópico,
 partición, offset de origen, excepción y momento). Catorce días son el doble de la ventana de
@@ -76,8 +88,9 @@ La clave es siempre el **`reservationId`**. Así todos los eventos de una misma 
 misma partición y se consumen **en orden**, que es lo que permite reconstruir el timeline y
 calcular el tiempo de ciclo correctamente.
 
-En `audit.timeline`, además, la compactación conserva el último evento por clave incluso pasada
-la retención.
+En `audit.timeline` la misma clave es la que usa la compactación: dentro de los 30 días deja el
+último hecho de cada reserva. Pasada la retención no queda ninguno, porque la política también
+incluye `delete`.
 
 ## Productores y consumidores
 
