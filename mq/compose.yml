@@ -36,6 +36,10 @@
 
 networks:
   andesstay-mq:
+    # Nombre fijo. Sin él, Docker antepone el nombre del proyecto y la red se llama
+    # mq_andesstay-mq, así que apps/compose.yml, que la declara external con el nombre
+    # andesstay-mq, no la encuentra y no arranca. El overlay compose.e2e.yml hereda este nombre.
+    name: andesstay-mq
     driver: bridge
 
 volumes:
