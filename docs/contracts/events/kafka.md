@@ -13,23 +13,74 @@ lo eliminó. En la nube lo despliega `infra/deploy/scripts/crear-kafka.sh` sobre
 
 ## Tópicos
 
-| Tópico | Particiones | Réplicas | `cleanup.policy` | Retención | Propósito |
-|---|---|---|---|---|---|
-| `reservations.events` | 3 | 3 | `delete` | 7 días | Fuente de verdad de los eventos de reserva. Alimenta reportería y auditoría |
-| `audit.timeline` | 3 | 3 | `compact,delete` | 30 días | Historial de quién, qué, cuándo y entre qué estados |
-| `reservations.events.DLT` | 3 | 3 | `delete` | 14 días | Lo que falló al consumir `reservations.events`, con metadatos del error |
-| `audit.timeline.DLT` | 3 | 3 | `delete` | 14 días | Lo mismo para `audit.timeline` |
+| Tópico | Particiones | Réplicas | `min.insync.replicas` | `cleanup.policy` | `retention.ms` | Propósito |
+|---|---|---|---|---|---|---|
+| `reservations.events` | 3 | 3 | 2 | `delete` | 604800000 (7 días) | Fuente de verdad de los eventos de reserva. Alimenta reportería y auditoría |
+| `audit.timeline` | 3 | 3 | 2 | `compact,delete` | 2592000000 (30 días) | Historial de quién, qué, cuándo y entre qué estados |
+| `reservations.events.DLT` | 3 | 3 | 2 | `delete` | 1209600000 (14 días) | Lo que falló al consumir `reservations.events`, con metadatos del error |
+| `audit.timeline.DLT` | 3 | 3 | 2 | `delete` | 1209600000 (14 días) | Lo mismo para `audit.timeline` |
 
 Los dos tópicos de negocio son `reservations.events` y `audit.timeline`. Los `.DLT` son
 infraestructura de error, no canales del dominio.
 
-Con 3 réplicas y 3 brokers, `min.insync.replicas` se fija en `2`: tolera la caída de un broker
-sin perder disponibilidad de escritura.
+### Por qué cada valor
 
-Los tópicos se crean por dos vías idempotentes que no se estorban: el contenedor `kafka-init` del
-compose al levantar el clúster, y los beans `NewTopic` de `KafkaTopicsConfig` en
-`ms-andesstay-reservations` al arrancar el servicio. `infra/kafka/scripts/crear-topicos.sh` sirve
-para repararlos sobre un clúster ya en marcha.
+**Comunes a los cuatro.**
+
+- **3 particiones.** Es el paralelismo máximo de un grupo: los consumidores corren con
+  concurrencia 3, un hilo por partición. Más particiones que hilos no aceleraría nada en este
+  volumen y multiplicaría los archivos abiertos por broker.
+- **3 réplicas.** Una por broker: cada partición sobrevive a la caída de dos brokers sin perder
+  lo ya confirmado.
+- **`min.insync.replicas=2`.** Junto con `acks=all` en los productores, una escritura solo se
+  confirma cuando está en dos brokers. Con un broker caído el clúster sigue aceptando escrituras;
+  con dos caídos las rechaza, en vez de confirmar algo que existe en una sola copia. Las DLT llevan
+  el mismo valor: su contenido es evidencia, y perderla por haberla escrito en un solo disco sería
+  perder justo lo que se quería conservar.
+
+**`reservations.events`: `delete` y 7 días.** Es un registro de hechos recientes. Sus dos
+consumidores, la ingesta de `ms-andesstay-report` y las topologías de Streams, lo leen en
+segundos; la historia larga vive en MySQL (`REPORT_STATS`, `AUDIT_EVENTS`). Siete días cubren
+con holgura un consumidor caído durante un fin de semana largo y la relectura desde el principio
+de una topología nueva. Pasado ese plazo, el evento ya no aporta nada que la base no tenga, y se
+borra. No se compacta porque cada evento es un hecho distinto: compactar por `reservationId`
+dejaría solo la última transición y los KPI perderían la creación y la confirmación.
+
+**`audit.timeline`: `compact,delete` y 30 días.** Es el flujo de quién hizo qué, ya derivado por
+la topología de `ms-andesstay-audit`. Las dos políticas actúan a la vez y conviene no confundir
+qué hace cada una:
+
+- **`delete` con 30 días** pone el techo: todo segmento más antiguo que `retention.ms` se borra,
+  **incluido el último hecho de cada reserva**. Con `compact,delete` nada sobrevive a la retención.
+  Los 30 días son la ventana de consulta de auditoría, la misma que usan los KPI históricos, y la
+  ventana en que un consumidor nuevo puede releer el tópico desde el principio.
+- **`compact`, con la clave `reservationId`,** reduce dentro de esa ventana cada reserva a su
+  hecho más reciente. Solo actúa sobre segmentos ya cerrados (`segment.bytes` en 256 MB), así que
+  el consumidor, que va al día, lee todos los hechos mucho antes de que el limpiador pase. Lo que
+  se gana es que una relectura completa recorre una entrada por reserva y no su historia entera:
+  el tópico queda como el estado más reciente de cada reserva en el último mes.
+
+Por eso **el historial completo no se reconstruye desde Kafka**. Vive en la tabla `AUDIT_EVENTS`,
+donde el consumidor `audit-timeline-group` guarda cada hecho, idempotente por `eventId`. Kafka
+transporta y amortigua; MySQL conserva.
+
+**Las DLT: `delete` y 14 días.** Guardan lo que falló, con las cabeceras de Spring Kafka (tópico,
+partición, offset de origen, excepción y momento). Catorce días son el doble de la ventana de
+`reservations.events`: un fallo que nadie revisó en una semana sigue ahí la siguiente. No se
+compactan: dos fallos del mismo evento son dos evidencias distintas y no deben pisarse.
+
+### Dónde se definen
+
+**La fuente de verdad es [`infra/kafka/scripts/crear-topicos.sh`](../../../kafka/scripts/crear-topicos.sh).**
+Crea los tópicos con `--if-not-exists` y después aplica la configuración con
+`kafka-configs --alter`, así que también corrige un tópico que ya existía con otros valores. El
+contenedor `kafka-init` del compose ejecuta ese mismo archivo al levantar el clúster, y se puede
+lanzar a mano sobre un clúster en marcha.
+
+Los beans `NewTopic` de `KafkaTopicsConfig` en `ms-andesstay-reservations` repiten los valores de
+los dos tópicos de negocio, para que un clúster que no se levantó con este compose quede con la
+forma correcta. Pero **solo crean**: `TopicBuilder` no modifica un tópico que ya existe. Si los dos
+lugares discrepan, manda el script, y el bean se corrige para que vuelva a coincidir.
 
 ### Clave de partición
 
@@ -37,8 +88,9 @@ La clave es siempre el **`reservationId`**. Así todos los eventos de una misma 
 misma partición y se consumen **en orden**, que es lo que permite reconstruir el timeline y
 calcular el tiempo de ciclo correctamente.
 
-En `audit.timeline`, además, la compactación conserva el último evento por clave incluso pasada
-la retención.
+En `audit.timeline` la misma clave es la que usa la compactación: dentro de los 30 días deja el
+último hecho de cada reserva. Pasada la retención no queda ninguno, porque la política también
+incluye `delete`.
 
 ## Productores y consumidores
 

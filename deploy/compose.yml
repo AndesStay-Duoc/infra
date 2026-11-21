@@ -219,6 +219,36 @@ services:
       retries: 10
       start_period: 90s
 
+  # ── Administrador de Kafka ─────────────────────────────────────────────────
+  # API REST para crear, listar y ajustar tópicos y para inspeccionar consumer
+  # groups y su lag (ms-andesstay-kafka). Habla con los tres brokers de ec2-kafka
+  # por su IP privada, igual que reservations, report y audit.
+  #
+  # No publica puertos: en este compose solo nginx lo hace, y el administrador no
+  # pasa por el API Gateway porque no es parte de la aplicación sino una
+  # herramienta del operador. Se usa desde la propia instancia, por SSH:
+  #   docker exec andesstay-kafka-admin wget -qO- \
+  #     --header "Authorization: Bearer $TOKEN" http://127.0.0.1:8087/api/v1/kafka/topics
+  # Aun así valida el JWT de Entra ID y exige el rol Admin, como ms-andesstay-mq.
+  kafka-admin:
+    build:
+      context: ../../ms-andesstay-kafka
+    container_name: andesstay-kafka-admin
+    restart: unless-stopped
+    environment:
+      <<: [*jvm-opts, *azure-env]
+      KAFKA_BOOTSTRAP: ${KAFKA_HOST:?Falta KAFKA_HOST. Ejecutar scripts/crear-kafka.sh y copiar KAFKA_PRIVATE_IP}:9092,${KAFKA_HOST}:9093,${KAFKA_HOST}:9094
+    networks: [andesstay]
+    # Solo un AdminClient, sin JPA ni consumidores: el mismo techo que el
+    # administrador de RabbitMQ en ec2-mq.
+    mem_limit: 320m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8087/actuator/health | grep -q UP"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
   # ── BFF / Spring Cloud Gateway ─────────────────────────────────────────────
   bff:
     build:

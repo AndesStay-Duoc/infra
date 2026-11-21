@@ -2,15 +2,26 @@ version: "3.9"
 
 # Microservicios AndesStay
 # Requiere que la red andesstay-mq y andesstay-kafka ya estén activas
-# Levantar: docker compose -f infra/mq/compose.yml up -d
+# Levantar: docker compose --env-file infra/.env -f infra/mq/compose.yml up -d
 #           docker compose -f infra/kafka/compose.yml up -d
-#           docker compose -f infra/apps/compose.yml up -d
+#           docker compose --env-file infra/apps/.env -f infra/apps/compose.yml up -d
+#
+# Las dos redes externas existen con estos nombres exactos porque mq/compose.yml y
+# kafka/compose.yml les fijan "name:". Sin eso Docker las crearía como mq_andesstay-mq y
+# kafka_andesstay-kafka, y este compose no arrancaría.
+#
+# notify NO está aquí: lo levanta mq/compose.yml junto al broker, con su buzón de prueba y su
+# configuración de reintentos. Este archivo lo declaraba también con el mismo container_name
+# (andesstay-notify), así que, siguiendo el orden de arriba, el segundo "up" fallaba con
+# "container name already in use". Mantener un solo dueño evita además dos consumidores con
+# configuraciones distintas sobre las mismas colas.
 
 # Estado local de las topologías de Kafka Streams. Declararlo como volumen y no como directorio
 # del contenedor es lo que hace que sobreviva a un docker compose up --build.
 volumes:
   report-streams:
   audit-streams:
+  mysql-data:
 
 networks:
   andesstay-apps:
@@ -20,7 +31,47 @@ networks:
   andesstay-kafka:
     external: true
 
+# Conexión a MySQL, la misma que usa deploy/compose.yml. Antes aquí había una URL jdbc:oracle:thin
+# que ningún servicio podía abrir: los pom solo traen mysql-connector-j y los application.yml fijan
+# MySQLDialect.
+x-datasource: &datasource-env
+  SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8
+  SPRING_DATASOURCE_USERNAME: ${MYSQL_APP_USER}
+  SPRING_DATASOURCE_PASSWORD: ${MYSQL_APP_PASSWORD}
+
+x-azure: &azure-env
+  AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+  AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+
 services:
+  # ── Base de datos ────────────────────────────────────────────────────────────
+  # Misma imagen, mismo juego de caracteres y mismo script de inicialización que el despliegue,
+  # para que lo que funciona en local funcione igual en EC2.
+  mysql:
+    image: mysql:8.0
+    container_name: andesstay-mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+00:00
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_APP_USER}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ../deploy/mysql/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - andesstay-apps
+    healthcheck:
+      # El doble $ evita que Compose interpole la variable: la resuelve el shell del contenedor.
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root --password=$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
   # ── BFF ──────────────────────────────────────────────────────────────────────
   bff:
     build: ../../ms-andesstay-bff
@@ -48,16 +99,23 @@ services:
     ports:
       - "8081:8081"
     environment:
-      SPRING_DATASOURCE_URL: jdbc:oracle:thin:@${ORACLE_HOST}:1521/${ORACLE_SERVICE}
-      SPRING_DATASOURCE_USERNAME: ${ORACLE_USER}
-      SPRING_DATASOURCE_PASSWORD: ${ORACLE_PASSWORD}
+      <<: [*datasource-env, *azure-env]
+      # El application.yml apunta por defecto a catalog-svc:8082, host que no existe en esta red.
+      # Sin esta variable reservations no puede consultar disponibilidad y toda reserva falla.
+      CATALOG_BASE_URL: http://catalog:8082
       RABBITMQ_HOST: rabbitmq1
       RABBITMQ_PORT: 5672
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASS: ${RABBITMQ_PASSWORD}
       KAFKA_BOOTSTRAP: kafka1:29092,kafka2:29093,kafka3:29094
-      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
-      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+      # Encendida: este compose se levanta siempre junto al clúster de kafka/compose.yml. En el
+      # application.yml la bandera vale false por defecto, para poder arrancar el servicio sin
+      # clúster (./mvnw spring-boot:run); aquí ese motivo no existe, y sin la variable
+      # reservations nunca publicaba en reservations.events, con lo que audit y report no
+      # recibían nada. Sigue siendo variable para poder apagarla sin editar el archivo.
+      ANDESSTAY_EVENTS_KAFKA_ENABLED: "${ANDESSTAY_EVENTS_KAFKA_ENABLED:-true}"
+    depends_on:
+      mysql: {condition: service_healthy}
     networks:
       - andesstay-apps
       - andesstay-mq
@@ -70,30 +128,11 @@ services:
     ports:
       - "8082:8082"
     environment:
-      SPRING_DATASOURCE_URL: jdbc:oracle:thin:@${ORACLE_HOST}:1521/${ORACLE_SERVICE}
-      SPRING_DATASOURCE_USERNAME: ${ORACLE_USER}
-      SPRING_DATASOURCE_PASSWORD: ${ORACLE_PASSWORD}
-      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
-      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+      <<: [*datasource-env, *azure-env]
+    depends_on:
+      mysql: {condition: service_healthy}
     networks:
       - andesstay-apps
-
-  # ── Notify ───────────────────────────────────────────────────────────────────
-  notify:
-    build: ../../ms-andesstay-notify
-    container_name: andesstay-notify
-    environment:
-      RABBITMQ_HOST: rabbitmq1
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: ${RABBITMQ_USER}
-      RABBITMQ_PASS: ${RABBITMQ_PASSWORD}
-      MAIL_HOST: ${MAIL_HOST}
-      MAIL_PORT: ${MAIL_PORT}
-      MAIL_USER: ${MAIL_USER}
-      MAIL_PASS: ${MAIL_PASS}
-    networks:
-      - andesstay-apps
-      - andesstay-mq
 
   # ── Report ───────────────────────────────────────────────────────────────────
   report:
@@ -102,18 +141,16 @@ services:
     ports:
       - "8083:8083"
     environment:
-      SPRING_DATASOURCE_URL: jdbc:oracle:thin:@${ORACLE_HOST}:1521/${ORACLE_SERVICE}
-      SPRING_DATASOURCE_USERNAME: ${ORACLE_USER}
-      SPRING_DATASOURCE_PASSWORD: ${ORACLE_PASSWORD}
+      <<: [*datasource-env, *azure-env]
       KAFKA_BOOTSTRAP: kafka1:29092,kafka2:29093,kafka3:29094
       # Kafka Streams guarda aquí su estado local. Sin volumen, cada reinicio obliga a
       # reconstruirlo desde el changelog del clúster: funciona, pero el servicio tarda en
       # responder y durante ese rato los KPIs en vivo salen incompletos.
       KAFKA_STREAMS_STATE_DIR: /var/lib/kafka-streams
-      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
-      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
     volumes:
       - report-streams:/var/lib/kafka-streams
+    depends_on:
+      mysql: {condition: service_healthy}
     networks:
       - andesstay-apps
       - andesstay-kafka
@@ -125,18 +162,37 @@ services:
     ports:
       - "8084:8084"
     environment:
-      SPRING_DATASOURCE_URL: jdbc:oracle:thin:@${ORACLE_HOST}:1521/${ORACLE_SERVICE}
-      SPRING_DATASOURCE_USERNAME: ${ORACLE_USER}
-      SPRING_DATASOURCE_PASSWORD: ${ORACLE_PASSWORD}
+      <<: [*datasource-env, *azure-env]
       KAFKA_BOOTSTRAP: kafka1:29092,kafka2:29093,kafka3:29094
       # Kafka Streams guarda aquí su estado local. Sin volumen, cada reinicio obliga a
       # reconstruirlo desde el changelog del clúster: funciona, pero el servicio tarda en
       # responder y durante ese rato los KPIs en vivo salen incompletos.
       KAFKA_STREAMS_STATE_DIR: /var/lib/kafka-streams
-      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
-      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
     volumes:
       - audit-streams:/var/lib/kafka-streams
+    depends_on:
+      mysql: {condition: service_healthy}
     networks:
       - andesstay-apps
+      - andesstay-kafka
+
+  # ── Administrador de Kafka ───────────────────────────────────────────────────
+  # API REST para crear, listar y ajustar tópicos y para inspeccionar consumer groups y su lag.
+  # Solo necesita la red del clúster: no habla con ningún otro microservicio ni con la base.
+  #
+  # Los tres brokers por sus listeners internos, no solo kafka1: el bootstrap sirve para descubrir
+  # el clúster, y con una sola dirección el arranque dependería de que justo ese broker esté en pie.
+  #
+  # El puerto va solo en loopback, como el de ms-andesstay-mq: es una herramienta del operador,
+  # no parte de la aplicación, y aunque valida el JWT con el rol Admin no tiene por qué quedar
+  # abierta a la red.
+  kafka-admin:
+    build: ../../ms-andesstay-kafka
+    container_name: andesstay-kafka-admin
+    ports:
+      - "127.0.0.1:8087:8087"
+    environment:
+      <<: *azure-env
+      KAFKA_BOOTSTRAP: kafka1:29092,kafka2:29093,kafka3:29094
+    networks:
       - andesstay-kafka

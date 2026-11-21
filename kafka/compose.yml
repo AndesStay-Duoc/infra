@@ -23,6 +23,10 @@
 
 networks:
   andesstay-kafka:
+    # Nombre fijo. Sin él, Docker antepone el nombre del proyecto y la red se llama
+    # kafka_andesstay-kafka, así que apps/compose.yml, que la declara external con el nombre
+    # andesstay-kafka, no la encuentra y no arranca.
+    name: andesstay-kafka
     driver: bridge
 
 volumes:
@@ -61,7 +65,11 @@ services:
     image: confluentinc/cp-zookeeper:7.6.1
     container_name: andesstay-zk2
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2182
+      # 2181 dentro de la red, igual que en los otros dos nodos: es el puerto al que apuntan los
+      # brokers (KAFKA_ZOOKEEPER_CONNECT). Con 2182, la entrada zookeeper2:2181 de esa lista no
+      # respondía y, si caía zookeeper1, los brokers se quedaban sin Zookeeper. En el host se sigue
+      # publicando como 2182, que es lo único que necesita ser distinto.
+      ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
       ZOOKEEPER_SERVER_ID: 2
       ZOOKEEPER_SERVERS: "zookeeper1:2888:3888;zookeeper2:2888:3888;zookeeper3:2888:3888"
@@ -80,7 +88,8 @@ services:
     image: confluentinc/cp-zookeeper:7.6.1
     container_name: andesstay-zk3
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2183
+      # 2181 dentro de la red, por el mismo motivo que en zookeeper2. En el host, 2183.
+      ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
       ZOOKEEPER_SERVER_ID: 3
       ZOOKEEPER_SERVERS: "zookeeper1:2888:3888;zookeeper2:2888:3888;zookeeper3:2888:3888"
@@ -245,43 +254,31 @@ services:
     image: confluentinc/cp-kafka:7.6.1
     container_name: andesstay-kafka-init
     depends_on: [kafka1, kafka2, kafka3]
+    restart: "no"
     networks:
       - andesstay-kafka
-    # Los dos tópicos del caso, con tres particiones y tres réplicas cada uno, más una cola de
-    # descarte por consumidor. Las políticas no son iguales porque los tópicos responden preguntas
-    # distintas: reservations.events es un registro de hechos recientes y se borra a los 7 días;
-    # audit.timeline es el historial de quién hizo qué, se compacta —el último hecho de cada
-    # reserva sobrevive a la retención— y conserva lo intermedio 30 días. Las colas de descarte
-    # guardan 14 días, que es tiempo de sobra para investigar un fallo.
+    # Los cuatro tópicos y su configuración NO se escriben aquí: este contenedor ejecuta
+    # scripts/crear-topicos.sh, que es la única fuente de verdad de particiones, réplicas,
+    # min.insync.replicas, cleanup.policy y retention.ms. La justificación de cada valor está en
+    # docs/contracts/events/kafka.md.
     #
-    # Los microservicios declaran estos mismos tópicos con KafkaAdmin, así que cualquier despliegue
-    # contra cualquier clúster los deja con la forma correcta. Las dos vías son idempotentes y no
-    # se estorban: Kafka ignora la creación de un tópico que ya existe.
-    command: >
-      bash -c "
-        echo 'Esperando a los tres brokers...' &&
-        cub kafka-ready -b kafka1:29092 3 60 &&
-        kafka-topics --create --if-not-exists --bootstrap-server kafka1:29092
-          --replication-factor 3 --partitions 3 --topic reservations.events
-          --config cleanup.policy=delete
-          --config retention.ms=604800000
-          --config min.insync.replicas=2 &&
-        kafka-topics --create --if-not-exists --bootstrap-server kafka1:29092
-          --replication-factor 3 --partitions 3 --topic audit.timeline
-          --config cleanup.policy=compact,delete
-          --config retention.ms=2592000000
-          --config min.insync.replicas=2 &&
-        kafka-topics --create --if-not-exists --bootstrap-server kafka1:29092
-          --replication-factor 3 --partitions 3 --topic reservations.events.DLT
-          --config cleanup.policy=delete
-          --config retention.ms=1209600000 &&
-        kafka-topics --create --if-not-exists --bootstrap-server kafka1:29092
-          --replication-factor 3 --partitions 3 --topic audit.timeline.DLT
-          --config cleanup.policy=delete
-          --config retention.ms=1209600000 &&
-        echo '--- Tópicos del clúster ---' &&
-        kafka-topics --describe --bootstrap-server kafka1:29092
-      "
+    # Antes la lista vivía duplicada aquí, dentro de un bloque "command: >" de YAML, y eso tenía
+    # dos problemas. El primero, que se desalineaba del script. El segundo, peor: el estilo ">"
+    # conserva los saltos de línea de las líneas con más sangría, así que bash recibía cada
+    # kafka-topics cortado de sus --topic y --config y el contenedor fallaba sin crear nada.
+    # Con la forma de lista de abajo no hay plegado que interpretar.
+    #
+    # El script crea con --if-not-exists y DESPUÉS aplica la configuración con kafka-configs
+    # --alter: así también corrige un tópico que ya existía con otros valores, cosa que ni
+    # "kafka-topics --create" ni el TopicBuilder de ms-andesstay-reservations hacen.
+    environment:
+      KAFKA_BOOTSTRAP: kafka1:29092,kafka2:29093,kafka3:29094
+    volumes:
+      - ./scripts:/scripts:ro
+    command:
+      - bash
+      - -c
+      - "cub kafka-ready -b kafka1:29092 3 120 && bash /scripts/crear-topicos.sh"
 
   # ── Kafka UI ─────────────────────────────────────────────────────────────────
   # Kafka UI. La versión va fijada como la de los demás servicios: con :latest, dos personas
