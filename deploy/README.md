@@ -368,10 +368,20 @@ cada despliegue vive en una cuenta AWS distinta.
 
 ## Qué decide la arquitectura, en una línea cada cosa
 
-- **Una sola instancia.** Kafka, Zookeeper y RabbitMQ no se despliegan: no caben
-  junto al resto. `reservations` omite la publicación de eventos con
-  `ANDESSTAY_EVENTS_ENABLED=false`, y `report` y `audit` sirven sus endpoints
-  REST sin consumir de Kafka.
+- **Tres instancias, una por responsabilidad.** `ec2-apps` lleva los
+  microservicios de dominio, el BFF y la SPA; `ec2-mq` el clúster de RabbitMQ y
+  lo que lo consume; `ec2-kafka` los tres nodos de Zookeeper, los tres brokers y
+  Kafka UI. No es solo lo que pide el caso: catorce contenedores no caben en una
+  t3.medium, y mezclarlos haría que un pico de uno se llevara por delante al
+  otro. Se crean con `crear-infra.sh`, `crear-mq.sh` y `crear-kafka.sh`, en ese
+  orden —las dos últimas necesitan el Security Group de la primera como origen
+  de sus reglas—.
+- **Los brokers anuncian la IP privada de `ec2-kafka`.** `crear-kafka.sh` la
+  escribe en `kafka.env` como `KAFKA_ADVERTISED_HOST`. Es lo que decide si el
+  despliegue funciona: un cliente conecta al bootstrap, el broker le responde con
+  la dirección anunciada y el cliente SE RECONECTA a ella, así que con
+  "localhost" anunciado el servicio se conecta a sí mismo y el error no menciona
+  a Kafka por ninguna parte.
 - **MySQL en contenedor**, que es lo que usan los `application.yml`.
 - **El TLS lo da API Gateway.** Entra ID no acepta Redirect URI con IP, y API
   Gateway no integra contra certificados autofirmados; por eso la SPA se sirve a

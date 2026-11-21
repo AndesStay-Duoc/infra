@@ -21,6 +21,12 @@ networks:
 
 volumes:
   mysql-data:
+  # Estado local de las topologías de Kafka Streams. Sin volumen, cada
+  # redespliegue obliga a reconstruirlo desde el changelog del clúster:
+  # funciona, pero el servicio tarda en responder y durante ese rato los KPIs en
+  # vivo salen incompletos.
+  report-streams:
+  audit-streams:
 
 # Opciones comunes a los cinco servicios Spring Boot. MaxRAMPercentage hace que
 # la JVM respete el mem_limit del contenedor en lugar de mirar la RAM del host,
@@ -94,8 +100,17 @@ services:
       # SÍNCRONO y sin broker lanza AmqpConnectException, con lo que cada POST
       # de reserva terminaría en 500.
       ANDESSTAY_EVENTS_RABBIT_ENABLED: "${ANDESSTAY_EVENTS_RABBIT_ENABLED:-true}"
-      # Kafka sigue desactivado: ese clúster no está desplegado.
-      ANDESSTAY_EVENTS_KAFKA_ENABLED: "false"
+      # Kafka ya se despliega: scripts/crear-kafka.sh levanta ec2-kafka con los
+      # tres nodos de Zookeeper, los tres brokers y Kafka UI. La bandera sigue
+      # siendo una variable y no un literal para que un despliegue que todavía
+      # no tenga esa instancia pueda apagarla sin editar el compose.
+      ANDESSTAY_EVENTS_KAFKA_ENABLED: "${ANDESSTAY_EVENTS_KAFKA_ENABLED:-true}"
+
+      # Los tres brokers, por la IP PRIVADA de ec2-kafka que crear-kafka.sh deja
+      # en el estado como KAFKA_PRIVATE_IP. Se listan los tres y no uno: el
+      # bootstrap solo sirve para descubrir el clúster, y con una sola dirección
+      # el arranque depende de que precisamente ese broker esté en pie.
+      KAFKA_BOOTSTRAP: ${KAFKA_HOST:?Falta KAFKA_HOST. Ejecutar scripts/crear-kafka.sh y copiar KAFKA_PRIVATE_IP}:9092,${KAFKA_HOST}:9093,${KAFKA_HOST}:9094
 
       # Dirección del clúster de la otra instancia. RABBITMQ_HOST es la IP
       # PRIVADA de ec2-mq, que crear-mq.sh deja en el estado como MQ_PRIVATE_IP;
@@ -157,13 +172,23 @@ services:
     restart: unless-stopped
     environment:
       <<: [*jvm-opts, *azure-env, *datasource-env]
-      # Impide que los @KafkaListener arranquen y reintenten conectarse contra un
-      # broker inexistente. Los endpoints REST siguen sirviendo desde MySQL.
-      SPRING_KAFKA_LISTENER_AUTO_STARTUP: "false"
+      # Consumidor y topología de Kafka Streams. La bandera los enciende a los
+      # dos a la vez: no tiene sentido que una mitad arranque sin la otra. En un
+      # despliegue sin clúster se pone en false y los endpoints REST siguen
+      # sirviendo el histórico desde MySQL.
+      ANDESSTAY_KAFKA_ENABLED: "${ANDESSTAY_KAFKA_ENABLED:-true}"
+      KAFKA_BOOTSTRAP: ${KAFKA_HOST:?Falta KAFKA_HOST. Ejecutar scripts/crear-kafka.sh y copiar KAFKA_PRIVATE_IP}:9092,${KAFKA_HOST}:9093,${KAFKA_HOST}:9094
+      KAFKA_STREAMS_STATE_DIR: /var/lib/kafka-streams
     depends_on:
       mysql: {condition: service_healthy}
     networks: [andesstay]
-    mem_limit: 512m
+    volumes:
+      - report-streams:/var/lib/kafka-streams
+    # 512 MB no bastan con Streams dentro: RocksDB reserva memoria fuera del
+    # montón de la JVM para sus cachés y sus índices, así que el contenedor
+    # crecería por encima del techo y el OOM killer lo pararía sin dejar rastro
+    # en el log de la aplicación.
+    mem_limit: 768m
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8083/actuator/health | grep -q UP"]
       interval: 15s
@@ -178,11 +203,15 @@ services:
     restart: unless-stopped
     environment:
       <<: [*jvm-opts, *azure-env, *datasource-env]
-      SPRING_KAFKA_LISTENER_AUTO_STARTUP: "false"
+      ANDESSTAY_KAFKA_ENABLED: "${ANDESSTAY_KAFKA_ENABLED:-true}"
+      KAFKA_BOOTSTRAP: ${KAFKA_HOST:?Falta KAFKA_HOST. Ejecutar scripts/crear-kafka.sh y copiar KAFKA_PRIVATE_IP}:9092,${KAFKA_HOST}:9093,${KAFKA_HOST}:9094
+      KAFKA_STREAMS_STATE_DIR: /var/lib/kafka-streams
     depends_on:
       mysql: {condition: service_healthy}
     networks: [andesstay]
-    mem_limit: 512m
+    volumes:
+      - audit-streams:/var/lib/kafka-streams
+    mem_limit: 768m
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8084/actuator/health | grep -q UP"]
       interval: 15s
