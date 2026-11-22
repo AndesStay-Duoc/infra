@@ -13,8 +13,32 @@ Clúster de **2 nodos** con Management UI habilitada.
 | Exchange | Tipo | Propósito |
 |---|---|---|
 | `cmd.direct` | direct | Enrutamiento exacto por routing key |
-| `cmd.topic` | topic | Enrutamiento por patrón, para suscripciones más amplias |
+| `cmd.topic` | topic | Enrutamiento por patrón, para suscripciones más amplias. **Hoy sin publicador** (ver abajo) |
 | `cmd.dead.dlx` | direct | Dead letter exchange al que van los mensajes agotados |
+
+### `cmd.topic`: declarado, enlazado y sin publicador, a propósito
+
+Ningún servicio publica hoy en `cmd.topic`. `ms-andesstay-reservations` envía los tres comandos
+por `cmd.direct`, con la routing key exacta de cada uno. Se mantiene de todos modos, por tres
+razones:
+
+- **Es parte de la topología del caso**: tres exchanges y nueve bindings. Quitarlo dejaría dos
+  exchanges y seis bindings.
+- **Es la vía para suscripciones por patrón.** Un servicio nuevo que necesite, por ejemplo, todos
+  los comandos de housekeeping, cualquiera sea su subtipo, publica o se enlaza aquí con
+  `housekeeping.#` sin tocar `cmd.direct` ni sus bindings exactos.
+- **Muestra una cola con varias routing keys**, que es uno de los patrones de la guía 2.1.3:
+  `q.cmd.email` recibe por `email.send` en `cmd.direct` y por `email.*` en `cmd.topic`.
+
+Lo declaran los mismos que declaran el resto: el exchange, `ms-andesstay-reservations` y
+`ms-andesstay-notify`, de forma idempotente; los tres bindings, solo `notify`. Está en la lista de
+protegidos de `ms-andesstay-mq`.
+
+**Cuidado al darle uso.** Un mensaje publicado en `cmd.topic` con una routing key que también
+existe en `cmd.direct` llega **una sola vez**, porque va a un solo exchange. Pero si un productor
+publicara el mismo comando en los dos exchanges, la cola lo recibiría dos veces. La idempotencia
+por `eventId` de notify evita el efecto doble, aunque no el mensaje duplicado. La regla es un
+exchange por comando.
 
 ## Colas
 
