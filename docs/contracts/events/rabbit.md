@@ -55,7 +55,7 @@ Seis colas: tres de trabajo y tres de mensajes muertos.
 | Argumento | Valor |
 |---|---|
 | `x-dead-letter-exchange` | `cmd.dead.dlx` |
-| `x-dead-letter-routing-key` | `<nombre de la cola>.dlq` |
+| `x-dead-letter-routing-key` | `<flujo>.dead`: `email.dead`, `housekeeping.dead`, `voucher.dead`. Son las routing keys de los bindings de `cmd.dead.dlx` hacia cada DLQ |
 | `durable` | `true` |
 
 Las DLQ son `durable` y **no** tienen dead letter propio: son el final del camino.
