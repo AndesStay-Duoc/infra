@@ -107,10 +107,9 @@ paths:
       summary: Eliminar una cola
       description: >
         Irreversible: se van tambien los mensajes que la cola tuviera dentro. Los nombres de la
-        topologia de AndesStay estan protegidos y responden 409 sin forzar=true.
+        topologia de AndesStay estan protegidos y responden 409; ningun parametro levanta esa
+        proteccion (ver RecursoProtegido).
       operationId: eliminarCola
-      parameters:
-        - $ref: '#/components/parameters/Forzar'
       responses:
         '204': { description: Cola eliminada }
         '401': { $ref: '#/components/responses/NoAutenticado' }
@@ -130,11 +129,10 @@ paths:
         200 con cuerpo y no 204 porque devuelve cuantos mensajes se eliminaron.
 
         Pasa por el mismo seguro que eliminar: descartar notificaciones pendientes es igual de
-        destructivo para lo que importa. El caso legitimo habitual, vaciar una DLQ ya analizada,
-        solo necesita forzar=true.
+        destructivo para lo que importa, y alcanza tambien a las DLQ del sistema. No hace falta en
+        el uso normal: DeadLetterConsumer de notify registra y confirma cada mensaje, asi que las
+        DLQ se mantienen vacias.
       operationId: purgarCola
-      parameters:
-        - $ref: '#/components/parameters/Forzar'
       responses:
         '200':
           description: Cola vaciada, con el conteo de mensajes eliminados
@@ -190,21 +188,43 @@ paths:
     parameters:
       - $ref: '#/components/parameters/NombreRecurso'
 
+    get:
+      tags: [exchanges]
+      summary: Describir un exchange
+      description: >
+        Tipo, durabilidad, argumentos y si esta protegido. Va por la API de gestion del 15672, igual
+        que el listado: AMQP no tiene una operacion para leer un exchange, y la declaracion pasiva
+        solo dice si existe, no su tipo ni sus argumentos. Por eso responde 503 si el 15672 no es
+        alcanzable.
+      operationId: describirExchange
+      responses:
+        '200':
+          description: El exchange
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExchangeResumen' }
+              example: { nombre: cmd.dead.dlx, tipo: direct, durable: true, autoDelete: false, interno: false, protegido: true }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/RolInsuficiente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '503': { $ref: '#/components/responses/GestionNoDisponible' }
+
     delete:
       tags: [exchanges]
       summary: Eliminar un exchange
       description: >
         Se eliminan tambien sus bindings; las colas enlazadas siguen existiendo. Lo que ocurre es
-        que las publicaciones contra ese exchange dejan de llegar a ninguna parte.
+        que las publicaciones contra ese exchange dejan de llegar a ninguna parte. La existencia se
+        comprueba antes contra la API de gestion, porque desde RabbitMQ 3.13 exchange.delete es
+        idempotente: sin el 15672 la baja responde 503 en vez de un 204 sin saber.
       operationId: eliminarExchange
-      parameters:
-        - $ref: '#/components/parameters/Forzar'
       responses:
         '204': { description: Exchange eliminado }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/RolInsuficiente' }
         '404': { $ref: '#/components/responses/NoEncontrado' }
         '409': { $ref: '#/components/responses/RecursoProtegido' }
+        '503': { $ref: '#/components/responses/GestionNoDisponible' }
 
   /api/v1/mq/bindings:
     get:
@@ -261,8 +281,8 @@ paths:
         identificador en la ruta. Es la unica desviacion del patron /recurso/{nombre} de esta API,
         y la impone el modelo de AMQP.
 
-        No lleva forzar: un binding borrado se restituye con una sola peticion y no se pierde
-        ningun mensaje ya encolado. Los que se publiquen mientras no existe si se descartan.
+        Un binding borrado se restituye con una sola peticion y no se pierde ningun mensaje ya
+        encolado. Los que se publiquen mientras no existe si se descartan.
       operationId: eliminarBinding
       parameters:
         - name: exchange
@@ -303,14 +323,6 @@ components:
       required: true
       schema: { type: string, maxLength: 255 }
 
-    Forzar:
-      name: forzar
-      in: query
-      description: >
-        Confirma una operacion destructiva sobre un nombre protegido. Sin el, esos nombres
-        responden 409. No es una prohibicion, es un seguro contra el error de dedo.
-      schema: { type: boolean, default: false }
-
   schemas:
 
     CrearColaRequest:
@@ -334,6 +346,11 @@ components:
         exclusiva:
           type: boolean
           default: false
+          enum: [false]
+          description: >
+            Solo false u omitido; true responde 400 VALIDACION. Una cola exclusiva pertenece a la
+            conexion AMQP que la declara, que aqui es la de esta API: ningun otro servicio podria
+            consumirla (RESOURCE_LOCKED) y el broker la borraria al reiniciarse la API.
         autoDelete:
           type: boolean
           default: false
@@ -341,8 +358,19 @@ components:
           type: object
           additionalProperties: true
           description: >
-            x-message-ttl, x-max-length, x-dead-letter-exchange, x-queue-type... Se pasan tal cual
-            al broker, que es quien valida nombres y rangos.
+            Se validan contra una lista cerrada, con tipo y rango, antes de llegar al broker. Un
+            argumento desconocido, de otro tipo o fuera de rango responde 400 PETICION_INVALIDA
+            nombrando el argumento. La lista es cerrada porque RabbitMQ acepta en silencio un
+            argumento que no conoce y no lo aplica: un error de tipeo creaba una cola sin el TTL
+            pedido.
+
+            Admitidos: x-message-ttl (0 a 4294967295), x-expires (1 a 4294967295), x-max-length y
+            x-max-length-bytes (enteros >= 0), x-overflow (drop-head, reject-publish,
+            reject-publish-dlx), x-dead-letter-exchange y x-dead-letter-routing-key (texto),
+            x-dead-letter-strategy (at-most-once, at-least-once), x-queue-type (classic, quorum,
+            stream; quorum y stream solo con durable=true), x-max-priority (1 a 255),
+            x-single-active-consumer (booleano), x-delivery-limit (entero >= 0) y x-queue-mode
+            (default, lazy). Los enteros van como numero JSON, no entre comillas.
           example:
             x-message-ttl: 300000
             x-dead-letter-exchange: cmd.dead.dlx
@@ -359,6 +387,11 @@ components:
         argumentos:
           type: object
           additionalProperties: true
+          description: >
+            Solo se admite alternate-exchange (el nombre de un exchange, como texto). Cualquier otra
+            clave responde 400 PETICION_INVALIDA.
+          example:
+            alternate-exchange: cmd.sin-ruta
 
     CrearBindingRequest:
       type: object
@@ -382,7 +415,10 @@ components:
         argumentos:
           type: object
           additionalProperties: true
-          description: Necesarios para un exchange HEADERS, donde la coincidencia va por x-match.
+          description: >
+            Necesarios para un exchange HEADERS, donde la coincidencia va por x-match. Solo se
+            valida x-match (all, any, all-with-x, any-with-x) y que ningun valor sea nulo: el resto
+            de las claves son los nombres de cabecera que se comparan, y pueden ser cualquiera.
 
     ColaResumen:
       type: object
@@ -471,16 +507,23 @@ components:
 
     SolicitudInvalida:
       description: >
-        Cuerpo invalido, nombre con el prefijo reservado amq., o el exchange por omision en una
-        baja de binding.
+        Cuerpo invalido (incluida una cola exclusiva), nombre con el prefijo reservado amq., un
+        argumento desconocido, de otro tipo o fuera de rango, o el exchange por omision en una baja
+        de binding.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
           examples:
             validacion:
               value: { error: VALIDACION, detalle: el cuerpo no es valido, campos: { nombre: el nombre de la cola es obligatorio } }
+            colaExclusiva:
+              value: { error: VALIDACION, detalle: el cuerpo no es valido, campos: { exclusiva: 'no se admite una cola exclusiva: perteneceria a la conexion de esta API, ningun otro servicio podria consumirla y el broker la borraria al reiniciarse la API' } }
             prefijoReservado:
               value: { error: PETICION_INVALIDA, detalle: 'el prefijo amq. esta reservado por AMQP para los recursos que genera el broker; elige otro nombre' }
+            argumentoDeOtroTipo:
+              value: { error: PETICION_INVALIDA, detalle: "el argumento 'x-message-ttl' de la cola tiene que ser un numero entero, no \"60000\"" }
+            argumentoDesconocido:
+              value: { error: PETICION_INVALIDA, detalle: "argumento desconocido 'x-mesage-ttl' para la cola. RabbitMQ lo aceptaria sin aplicarlo; los admitidos son: x-dead-letter-exchange, ..." }
 
     NoAutenticado:
       description: Falta el token o no es valido.
@@ -504,12 +547,14 @@ components:
 
     RecursoProtegido:
       description: >
-        El nombre pertenece a la topologia de AndesStay y la operacion es destructiva. Se repite
-        con forzar=true si es intencionado.
+        El nombre pertenece a la topologia de AndesStay (andesstay.mq.protegidos) y la operacion es
+        destructiva. Ningun parametro de la peticion levanta la proteccion: cambiarla exige editar
+        esa lista y volver a desplegar. El parametro ?forzar=true de versiones anteriores ya no
+        existe; si se envia, se ignora y la respuesta es la misma.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
-          example: { error: RECURSO_PROTEGIDO, detalle: "eliminar 'q.cmd.email' afectaria a la topologia de AndesStay. Si es intencionado, repite la peticion con ?forzar=true", nombre: q.cmd.email }
+          example: { error: RECURSO_PROTEGIDO, detalle: "No se permite eliminar la cola 'q.cmd.email': forma parte de la topologia de AndesStay (andesstay.mq.protegidos). Esta API no la modifica; cambiarla exige editar esa lista y volver a desplegar", nombre: q.cmd.email }
 
     TopologiaIncompatible:
       description: >

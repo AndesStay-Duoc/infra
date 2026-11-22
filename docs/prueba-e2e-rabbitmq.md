@@ -354,6 +354,13 @@ Los cinco responden `409`:
 {"error":"RECURSO_PROTEGIDO","detalle":"No se permite eliminar el binding del sistema 'cmd.direct -> q.cmd.email': …","nombre":"q.cmd.email"}
 ```
 
+> **Cambio posterior a esta verificación.** Desde `ms-andesstay-mq` `fix/mq-quitar-forzar`, el
+> parámetro `?forzar=true` ya no existe: nunca levantó la protección y solo cambiaba el log. Los
+> comandos de arriba siguen siendo válidos y siguen respondiendo `409`, porque el parámetro se
+> ignora. Lo único que cambia es el final del `detalle`: en lugar de "…ni siquiera con
+> ?forzar=true" dice "…cambiarla exige editar esa lista y volver a desplegar". La salida de arriba
+> se deja como se registró en la verificación.
+
 También se permite crear y quitar un binding **desde** un exchange del sistema hacia una cola que
 no es del sistema, porque solo agrega una copia de los mensajes. La segunda baja comprueba que el
 binding ya no existe:
