@@ -86,12 +86,14 @@ Abrirlo y completar, como mínimo:
 | `RABBITMQ_ERLANG_COOKIE` | Cualquier texto largo; lo comparten los dos nodos |
 | `MYSQL_ROOT_PASSWORD`, `MYSQL_APP_PASSWORD` | Cualquier contraseña |
 | `MYSQL_DATABASE`, `MYSQL_APP_USER` | `andesstay` (dejar los de la plantilla) |
-| `MAIL_HOST` | `mailpit` (o vacío: el compose usa `mailpit` por omisión) |
-| `MAIL_PORT` | `1025`. **Hay que cambiarlo**: la plantilla trae `587`, y con ese puerto notify no alcanza a Mailpit y todos los correos terminan en la DLQ |
-| `MAIL_USER`, `MAIL_PASS` | Pueden quedar como están: el compose desactiva la autenticación SMTP y Mailpit acepta cualquiera |
+| `MAIL_HOST`, `MAIL_PORT`, `MAIL_USER`, `MAIL_PASS` | Dejarlas comentadas, como vienen en la plantilla: el compose usa `mailpit:1025` sin autenticación |
+
+> Esta verificación se hizo con una plantilla anterior que traía `MAIL_PORT=587` activo, y había
+> que cambiarlo a `1025`: con `587`, notify no alcanza a Mailpit y todos los correos terminan en la
+> DLQ. La plantilla actual trae las cuatro variables de correo comentadas.
 
 `AZURE_TENANT_ID` y `AZURE_CLIENT_ID` pueden quedar vacíos: los compose usan los del sistema por
-omisión. Las variables de Oracle no se usan.
+omisión. La plantilla ya no trae variables de Oracle.
 
 Para no repetir el comando largo, se define un alias de sesión:
 
