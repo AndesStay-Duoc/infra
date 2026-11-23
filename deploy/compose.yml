@@ -238,6 +238,16 @@ services:
     environment:
       <<: [*jvm-opts, *azure-env]
       KAFKA_BOOTSTRAP: ${KAFKA_HOST:?Falta KAFKA_HOST. Ejecutar scripts/crear-kafka.sh y copiar KAFKA_PRIVATE_IP}:9092,${KAFKA_HOST}:9093,${KAFKA_HOST}:9094
+      # Perfil del administrador. El perfil `demo` registra PruebaDeCargaController, que publica
+      # N mensajes de una vez para que el lag aparezca en Kafka UI y en
+      # GET /consumer-groups/{id} y se vea bajar. Sin el perfil la clase no se registra y la ruta
+      # responde 404, no 403: no hay nada ahi.
+      #
+      # Viene activo porque este despliegue existe para demostrarse, y sin el no hay forma de
+      # mostrar lag: un grupo al dia no ensena nada. El propio controlador explica por que esta
+      # detras de un perfil y no suelto, y el razonamiento sigue valiendo: en un entorno real esta
+      # variable se deja vacia, y entonces la ruta deja de existir.
+      SPRING_PROFILES_ACTIVE: ${KAFKA_ADMIN_PERFIL-demo}
     networks: [andesstay]
     # Solo un AdminClient, sin JPA ni consumidores: el mismo techo que el
     # administrador de RabbitMQ en ec2-mq.
