@@ -193,7 +193,8 @@ partición**. Eso es el paralelismo del que se habla en el informe, y aquí se v
 `CONSUMER-ID`.
 
 El `LAG` en 0 significa que el consumo va al día. Para que el lag **se vea bajar**, hace falta
-generar carga: ver «Lo que hoy no se puede demostrar», más abajo.
+generar carga: ver «Generar lag visible», más abajo. Conviene enseñar primero este reparto con el
+lag en 0 y lanzar la carga después, para que se vea el contraste.
 
 ### 6 · Las garantías del productor
 
@@ -242,11 +243,21 @@ con el mismo archivo en `ms-andesstay-report`.
 **Pantalla:** Postman, o `curl` en la terminal C.
 
 `ms-andesstay-kafka` administra el clúster por API, igual que `ms-andesstay-mq` hace con RabbitMQ.
-Está publicado **solo en loopback**, así que se llega por túnel:
+
+**Cómo se llega a él depende del entorno, y conviene tenerlo claro antes.** En `ec2-apps` el
+administrador **no publica ningún puerto**: en `deploy/compose.yml` solo nginx lo hace, y esta no
+es parte de la aplicación sino una herramienta del operador. Un túnel SSH al 8087 **no sirve**,
+porque no hay nada escuchando en el host. Se llama desde dentro de la instancia:
 
 ```bash
-ssh -i ~/.ssh/andesstay-key-20261012222825.pem -L 8087:localhost:8087 ubuntu@44.212.152.92
+ssh -i ~/.ssh/andesstay-key-20261012222825.pem ubuntu@44.212.152.92
+TOKEN=<el Bearer copiado del DevTools>
+docker exec andesstay-kafka-admin wget -qO-   --header "Authorization: Bearer $TOKEN" http://127.0.0.1:8087/api/v1/kafka/topics
 ```
+
+En el clúster **local**, en cambio, `apps/compose.yml` sí lo publica en `127.0.0.1:8087`, así que
+ahí se usa Postman o `curl` contra `http://localhost:8087` sin más. Si la demostración va a usar
+Postman, es el entorno local el que lo permite.
 
 | Llamada | Qué muestra |
 |---|---|
@@ -261,31 +272,35 @@ seguridad no acaba en el API Gateway.
 
 ---
 
-## Lo que hoy no se puede demostrar
+## Generar lag visible
 
-**Generar lag visible.** `ms-andesstay-kafka` trae un generador de carga —
-`POST /api/v1/kafka/pruebas/carga?count=10000`— pensado exactamente para eso: diez mil mensajes
-hacen que el lag aparezca en Kafka UI y baje mientras se mira.
+**Pantalla:** Postman o `curl`, y Kafka UI → *Consumers* al lado.
 
-Pero está **detrás del perfil `demo`**, y ningún compose lo activa, así que hoy la ruta devuelve
-**404, no 403**: la clase no se registra y no hay nada ahí. Es deliberado, y la razón está escrita
-en el encabezado de
-`ms-andesstay-kafka/src/main/java/cl/andesstay/kafka/controller/PruebaDeCargaController.java`:
-un administrador que puede inyectar diez mil mensajes en un tópico de producción no es un
-administrador.
+Los bloques anteriores muestran el reparto de particiones, pero con el lag en 0: correcto y
+estático. Para que **se vea bajar** hace falta carga, y para eso está
+`POST /api/v1/kafka/pruebas/carga`, que publica N mensajes de una vez.
 
-Para habilitarlo en la demostración hay que agregar una línea al servicio `kafka-admin`:
-
-```yaml
-    environment:
-      SPRING_PROFILES_ACTIVE: demo
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN"   'http://localhost:8087/api/v1/kafka/pruebas/carga?count=10000'
 ```
 
-En `infra/apps/compose.yml` para el clúster local y en `infra/deploy/compose.yml` para `ec2-apps`.
-**Decidirlo antes de la defensa**, no durante.
+En `ec2-apps`, por `docker exec`, como en el bloque 8.
 
-Sin eso, el bloque 5 se demuestra con el reparto de particiones y el lag en 0, que es correcto pero
-estático.
+Diez mil mensajes bastan para que el lag aparezca en Kafka UI y en
+`GET /consumer-groups/report-consumer-group`, y baje mientras se mira. La clave de cada mensaje va
+variando a propósito: con una sola, todos caerían en la misma partición y el retraso se
+concentraría en un consumidor, que es lo contrario de lo que se quiere mostrar.
+
+> **Si la ruta responde 404**, el perfil `demo` no está activo. La clase no se registra sin él, y
+> por eso es 404 y no 403: no hay nada ahí. Lo gobierna `KAFKA_ADMIN_PERFIL`, que viene con `demo`
+> por omisión; definirla **vacía** lo apaga. La razón de que esté detrás de un perfil está en el
+> encabezado de
+> `ms-andesstay-kafka/src/main/java/cl/andesstay/kafka/controller/PruebaDeCargaController.java`:
+> un administrador que puede inyectar diez mil mensajes en un tópico de producción no es un
+> administrador.
+
+**No lanzar la carga antes del bloque 5**, o el reparto de particiones se enseña con el lag ya
+alto y se pierde el contraste entre un grupo al día y uno retrasado.
 
 ---
 
