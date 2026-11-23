@@ -51,6 +51,7 @@ bash scripts/destruir-infra.sh --detener
 | `credenciales-aws.example` | Plantilla para pegar las credenciales del laboratorio |
 | `scripts/instalar-aws-cli.ps1` | Instala AWS CLI v2 y Git en Windows |
 | `scripts/clonar-repos.sh` | Clona los diez repositorios como carpetas hermanas |
+| `scripts/preparar-env-local.sh` | Genera `infra/.env` e `infra/apps/.env` para levantar con Docker en el propio equipo. No toca AWS |
 | `scripts/aws-session.sh` / `.ps1` | Carga las credenciales en el perfil `andesstay` |
 | `scripts/check-aws-session.sh` | Indica si la sesión sigue viva y cuánto le queda |
 | `scripts/crear-infra.sh` | Crea y despliega todo, de punta a punta |
