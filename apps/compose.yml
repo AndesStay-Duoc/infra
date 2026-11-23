@@ -194,5 +194,15 @@ services:
     environment:
       <<: *azure-env
       KAFKA_BOOTSTRAP: kafka1:29092,kafka2:29093,kafka3:29094
+      # Perfil del administrador. El perfil `demo` registra PruebaDeCargaController, que publica
+      # N mensajes de una vez para que el lag aparezca en Kafka UI y en
+      # GET /consumer-groups/{id} y se vea bajar. Sin el perfil la clase no se registra y la ruta
+      # responde 404, no 403: no hay nada ahi.
+      #
+      # Viene activo porque este despliegue existe para demostrarse, y sin el no hay forma de
+      # mostrar lag: un grupo al dia no ensena nada. El propio controlador explica por que esta
+      # detras de un perfil y no suelto, y el razonamiento sigue valiendo: en un entorno real esta
+      # variable se deja vacia, y entonces la ruta deja de existir.
+      SPRING_PROFILES_ACTIVE: ${KAFKA_ADMIN_PERFIL-demo}
     networks:
       - andesstay-kafka
