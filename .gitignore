@@ -31,3 +31,10 @@ secrets/
 deploy/credenciales-aws.txt
 deploy/.estado-aws.env
 deploy/.estado-aws.env.bak.*
+
+# Postman explota la colección a su formato v3 --un fichero por petición-- al importarla, y sus
+# rutas llegan a 268 caracteres. Windows corta en 260, así que ese directorio solo se puede
+# versionar con core.longpaths activado, que es una configuración POR CLON: quien descargue la
+# rama sin ponerla no puede ni hacer checkout. Se versiona el fichero único, que además se importa
+# de una sola vez; el directorio queda como artefacto local de trabajo.
+docs/evidencias/autorizacion/postman/

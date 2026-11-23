@@ -1,10 +1,34 @@
 {
-  "id": "6c2f9a14-3e87-4d05-b1c9-7a4e2d8f0c63",
-  "name": "AndesStay · local",
+  "id": "andesstay-v1",
+  "name": "AndesStay · AWS",
   "values": [
     {
       "key": "bffUrl",
-      "value": "http://localhost:8080",
+      "value": "https://6oqve4lv50.execute-api.us-east-1.amazonaws.com",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "gatewayUrl",
+      "value": "https://6oqve4lv50.execute-api.us-east-1.amazonaws.com",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "webOrigin",
+      "value": "https://4uadokoeij.execute-api.us-east-1.amazonaws.com",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "mqUrl",
+      "value": "http://localhost:8086",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "notifyUrl",
+      "value": "http://localhost:8085",
       "type": "default",
       "enabled": true
     },
@@ -15,27 +39,39 @@
       "enabled": true
     },
     {
-      "key": "gatewayUrl",
-      "value": "",
-      "type": "default",
-      "enabled": true
-    },
-    {
       "key": "nginxUrl",
+      "value": "http://44.212.152.92",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "reservaId",
       "value": "",
       "type": "default",
       "enabled": true
     },
     {
-      "key": "webOrigin",
-      "value": "http://localhost:4200",
+      "key": "actorId",
+      "value": "",
       "type": "default",
       "enabled": true
     },
     {
-      "key": "gatewaySecret",
+      "key": "reservaSinCupoId",
       "value": "",
-      "type": "secret",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "unidadCreadaId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "unitId",
+      "value": "1",
+      "type": "default",
       "enabled": true
     },
     {
@@ -69,9 +105,9 @@
       "enabled": true
     },
     {
-      "key": "reservaSinCupoId",
+      "key": "gatewaySecret",
       "value": "",
-      "type": "default",
+      "type": "secret",
       "enabled": true
     }
   ],
