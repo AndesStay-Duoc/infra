@@ -50,7 +50,7 @@ bash scripts/destruir-infra.sh --detener
 |---|---|
 | `credenciales-aws.example` | Plantilla para pegar las credenciales del laboratorio |
 | `scripts/instalar-aws-cli.ps1` | Instala AWS CLI v2 y Git en Windows |
-| `scripts/clonar-repos.sh` | Clona los siete repositorios como carpetas hermanas |
+| `scripts/clonar-repos.sh` | Clona los diez repositorios como carpetas hermanas |
 | `scripts/aws-session.sh` / `.ps1` | Carga las credenciales en el perfil `andesstay` |
 | `scripts/check-aws-session.sh` | Indica si la sesión sigue viva y cuánto le queda |
 | `scripts/crear-infra.sh` | Crea y despliega todo, de punta a punta |
@@ -110,18 +110,24 @@ git clone https://github.com/AndesStay-Duoc/infra.git AndesStay/infra
 bash AndesStay/infra/deploy/scripts/clonar-repos.sh
 ```
 
-Deja esta estructura, que es la que espera `crear-infra.sh`:
+Deja esta estructura, que es la que esperan los tres scripts de despliegue:
 
 ```
 AndesStay/
 ├── infra/
-├── frontend-andesstay/
-├── ms-andesstay-bff/
-├── ms-andesstay-reservations/
-├── ms-andesstay-catalog/
-├── ms-andesstay-report/
-└── ms-andesstay-audit/
+├── frontend-andesstay/           ┐
+├── ms-andesstay-bff/             │
+├── ms-andesstay-reservations/    │
+├── ms-andesstay-catalog/         ├ crear-infra.sh  → ec2-apps
+├── ms-andesstay-report/          │
+├── ms-andesstay-audit/           │
+├── ms-andesstay-kafka/           ┘
+├── ms-andesstay-notify/          ┐ crear-mq.sh     → ec2-mq
+└── ms-andesstay-mq/              ┘
 ```
+
+`crear-kafka.sh` no necesita ninguno: la instancia de streaming solo corre imágenes
+oficiales de Confluent y Kafka UI.
 
 Variantes:
 

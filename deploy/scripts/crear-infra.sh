@@ -51,7 +51,8 @@ done
 [[ "$ORIGEN" == "local" || "$ORIGEN" == "github" ]] || die "--origen admite 'local' o 'github'"
 
 REPOS=(infra frontend-andesstay ms-andesstay-bff ms-andesstay-reservations
-       ms-andesstay-catalog ms-andesstay-report ms-andesstay-audit)
+       ms-andesstay-catalog ms-andesstay-report ms-andesstay-audit
+       ms-andesstay-kafka)
 
 INSTALL_DIR="/opt/andesstay"
 AMI_PARAM="/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
