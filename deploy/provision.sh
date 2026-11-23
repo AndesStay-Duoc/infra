@@ -178,6 +178,18 @@ for repo in "${REPOS[@]}"; do
         git -C "$repo" checkout --quiet "$GIT_BRANCH"
         git -C "$repo" pull --quiet --ff-only origin "$GIT_BRANCH"
     else
+        # El directorio puede existir SIN historial: un despliegue con --origen local envia un
+        # tarball que excluye .git, y git clone se niega a escribir en un directorio no vacio. Sin
+        # esto, la instancia queda atada para siempre al origen de su primer despliegue.
+        #
+        # Se aparta en lugar de borrarse porque ahi vive contenido que no esta versionado --el .env
+        # del bff y los certificados autofirmados de infra-- y apartarlo cuesta unos megabytes. Se
+        # guarda UNA copia por repositorio: la anterior se descarta para que no se acumulen.
+        if [[ -e "$repo" ]]; then
+            echo "  $repo existe sin historial, se aparta como $repo.previo"
+            rm -rf "$repo.previo"
+            mv "$repo" "$repo.previo"
+        fi
         log "Clonando $repo"
         git clone --quiet --branch "$GIT_BRANCH" "$GIT_ORG/$repo.git" "$repo"
     fi
