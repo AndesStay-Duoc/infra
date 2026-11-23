@@ -2,17 +2,24 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # AndesStay — clona los repositorios como carpetas hermanas de infra
 #
-# crear-infra.sh sube el código desde el equipo local y espera encontrar los
-# siete repositorios del despliegue en la misma carpeta que infra:
+# Los tres scripts de despliegue suben el código desde el equipo local y esperan
+# encontrar los diez repositorios en la misma carpeta que infra:
 #
 #   AndesStay/
 #   ├── infra/                  ← donde está este script
-#   ├── frontend-andesstay/
-#   ├── ms-andesstay-bff/
+#   ├── frontend-andesstay/     ┐
+#   ├── ms-andesstay-bff/       │
 #   ├── ms-andesstay-reservations/
-#   ├── ms-andesstay-catalog/
-#   ├── ms-andesstay-report/
-#   └── ms-andesstay-audit/
+#   ├── ms-andesstay-catalog/   ├ crear-infra.sh   → ec2-apps
+#   ├── ms-andesstay-report/    │
+#   ├── ms-andesstay-audit/     │
+#   ├── ms-andesstay-kafka/     ┘
+#   ├── ms-andesstay-notify/    ┐ crear-mq.sh      → ec2-mq
+#   └── ms-andesstay-mq/        ┘
+#
+# ms-andesstay-kafka lo compila deploy/compose.yml como servicio kafka-admin, y
+# notify y mq los compila mq/compose.yml. Faltando cualquiera de los tres, el
+# script de despliegue correspondiente aborta al preparar el contexto de build.
 #
 # Uso, desde Git Bash:
 #   git clone https://github.com/AndesStay-Duoc/infra.git AndesStay/infra
@@ -46,7 +53,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 REPOS=(infra frontend-andesstay ms-andesstay-bff ms-andesstay-reservations
-       ms-andesstay-catalog ms-andesstay-report ms-andesstay-audit)
+       ms-andesstay-catalog ms-andesstay-report ms-andesstay-audit
+       ms-andesstay-kafka ms-andesstay-notify ms-andesstay-mq)
 
 log()  { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32m[ok]\033[0m %s\n' "$*"; }
